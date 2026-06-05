@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<title>Gorent Admin — Boshqaruv paneli</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="/assets/gorent-symbol.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geologica:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --g-font: "Geologica", system-ui, -apple-system, sans-serif;
+    --g-brand: #7863fc;
+    --g-brand-deep: #181235;
+    --g-brand-soft: #ece9fe;
+    --g-brand-ink: #4a39c9;
+    --g-ink: #1A1816;
+    --g-ink-2: #3C3934;
+    --g-ink-3: #6e6a64;
+    --g-ink-4: #9a958e;
+    --g-line: #ece8e0;
+    --g-bg: #FBFAF7;
+    --g-bg-2: #F4F1E9;
+    --g-card: #ffffff;
+  }
+  html, body, #root { margin: 0; padding: 0; height: 100%; }
+  body {
+    font: 400 14px var(--g-font);
+    color: var(--g-ink);
+    background: var(--g-bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  * { box-sizing: border-box; }
+  button, input, textarea, select { font-family: var(--g-font); }
+
+  /* Form controls */
+  .adm-input {
+    width: 100%; padding: 11px 13px; border: 1px solid var(--g-line); border-radius: 10px;
+    font: 400 14px var(--g-font); color: var(--g-ink); background: var(--g-card); outline: none;
+    transition: border-color .14s;
+  }
+  .adm-input:focus { border-color: var(--g-brand); }
+  .adm-input:disabled { background: var(--g-bg-2); color: var(--g-ink-4); }
+  .adm-input::placeholder { color: var(--g-ink-4); }
+  .adm-select {
+    padding: 10px 34px 10px 13px; border: 1px solid var(--g-line); border-radius: 10px;
+    font: 500 13px var(--g-font); color: var(--g-ink); background: var(--g-card); cursor: pointer; outline: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239a958e' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  .adm-select:focus { border-color: var(--g-brand); }
+
+  /* Density */
+  [data-density="compact"] td { padding-top: 9px !important; padding-bottom: 9px !important; }
+  [data-density="comfy"] td { padding-top: 17px !important; padding-bottom: 17px !important; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
