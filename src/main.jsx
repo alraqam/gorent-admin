@@ -3421,33 +3421,84 @@ function IntegrationsTab() {
 
 // ── Team tab ────────────────────────────────────────────────
 function TeamTab() {
-  const team = [
-    { name: "Admin Operator", email: "operator@gorent.uz", role: "Super-admin", hue: 155 },
-    { name: "Madina Yusupova", email: "madina@gorent.uz", role: "Moderator", hue: 320 },
-    { name: "Jahongir Aliyev", email: "jahongir@gorent.uz", role: "Moliya", hue: 220 },
-    { name: "Dilshod Karimov", email: "dilshod@gorent.uz", role: "Qo'llab-quvvatlash", hue: 35 },
-  ];
-  const roleHue = { 'Super-admin': 155, 'Moderator': 268, 'Moliya': 220, "Qo'llab-quvvatlash": 35 };
+  const [users, setUsers] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [showForm, setShowForm] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const blank = { name: '', email: '', password: '', role: 'platform', org: 'Gorent' };
+  const [f, setF] = React.useState(blank);
+  const me = api.currentUser();
+  const roleHue = (r) => (r === 'platform' ? 155 : 268);
+
+  const load = React.useCallback(() => {
+    api.get('/users').then(setUsers).catch((e) => setErr(e.message));
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  const create = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await api.post('/users', f);
+      setF(blank); setShowForm(false); load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const del = async (u) => {
+    if (!window.confirm(`"${u.name}" foydalanuvchisi o'chirilsinmi?`)) return;
+    try { await api.del('/users/' + u.id); load(); } catch (e) { window.alert(e.message); }
+  };
+  const setRole = async (u, role) => {
+    try { await api.patch('/users/' + u.id, { role }); load(); } catch (e) { window.alert(e.message); }
+  };
+
   return (
     <Card pad={0}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 20px' }}>
         <div>
           <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Jamoa a'zolari</div>
-          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{team.length} ta a'zo · rollar va ruxsatlar</div>
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{users ? `${users.length} ta foydalanuvchi · rollar va ruxsatlar` : 'Yuklanmoqda…'}</div>
         </div>
-        <Btn kind="primary" sm><IconPlus size={15} /> A'zo taklif qilish</Btn>
+        <Btn kind="primary" sm onClick={() => { setShowForm((v) => !v); setErr(null); }}><IconPlus size={15} /> A'zo qo'shish</Btn>
       </div>
-      {team.map((m, i) => (
-        <div key={m.email} className="adm-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderTop: '1px solid var(--g-line)' }}>
-          <Avatar name={m.name} size={38} hue={m.hue} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{m.name}</div>
-            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{m.email}</div>
+
+      {showForm && (
+        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--g-line)', background: 'var(--g-bg)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <input className="adm-input" placeholder="Ism" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          <input className="adm-input" placeholder="Email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+          <input className="adm-input" type="password" placeholder="Parol (kamida 6 belgi)" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+          <select className="adm-select" style={{ width: '100%' }} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
+            <option value="platform">Platforma admini</option>
+            <option value="host">Mezbon</option>
+          </select>
+          {err && <div style={{ gridColumn: '1 / -1', font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+          <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Btn kind="ghost" sm onClick={() => { setShowForm(false); setErr(null); setF(blank); }}>Bekor</Btn>
+            <Btn kind="primary" sm onClick={create} {...(busy ? { disabled: true } : {})}>{busy ? '…' : "Qo'shish"}</Btn>
           </div>
-          <span style={{ font: `600 11.5px ${window.GO.font}`, color: `oklch(0.42 0.12 ${roleHue[m.role]})`, background: `oklch(0.95 0.04 ${roleHue[m.role]})`, padding: '5px 12px', borderRadius: 999 }}>{m.role}</span>
-          <IconBtn title="Boshqa"><IconDots size={16} /></IconBtn>
         </div>
-      ))}
+      )}
+
+      {!users && !err && <div style={{ padding: '20px', font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>}
+      {err && !showForm && <div style={{ padding: '20px', font: `500 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+      {users && users.map((u) => {
+        const isMe = me && u.id === me.id;
+        return (
+          <div key={u.id} className="adm-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px', borderTop: '1px solid var(--g-line)' }}>
+            <Avatar name={u.name} size={38} hue={roleHue(u.role)} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{u.name} {isMe && <span style={{ font: `500 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>(siz)</span>}</div>
+              <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{u.email}</div>
+            </div>
+            <select className="adm-select" value={u.role} onChange={(e) => setRole(u, e.target.value)} style={{ padding: '6px 26px 6px 10px' }}>
+              <option value="platform">Platforma</option>
+              <option value="host">Mezbon</option>
+            </select>
+            {isMe
+              ? <span style={{ width: 32, display: 'inline-block' }} />
+              : <IconBtn title="O'chirish" onClick={() => del(u)} style={{ color: 'oklch(0.55 0.16 25)' }}><IconTrash size={16} /></IconBtn>}
+          </div>
+        );
+      })}
     </Card>
   );
 }
