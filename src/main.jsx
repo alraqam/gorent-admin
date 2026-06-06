@@ -3503,6 +3503,65 @@ function TeamTab() {
   );
 }
 
+function AuditTab() {
+  const [rows, setRows] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [entity, setEntity] = React.useState('all');
+  const [actor, setActor] = React.useState('');
+
+  const load = React.useCallback(() => {
+    const q = new URLSearchParams({ limit: '100' });
+    if (entity !== 'all') q.set('entity', entity);
+    if (actor) q.set('actor', actor);
+    api.get('/audit?' + q.toString()).then(setRows).catch((e) => setErr(e.message));
+  }, [entity, actor]);
+  React.useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
+
+  const methodHue = { POST: 200, PUT: 70, PATCH: 70, DELETE: 25, GET: 250 };
+  const fmtTime = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('uz-UZ') + ' ' + d.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
+  };
+  const entities = ['all', 'products', 'bookings', 'hosts', 'reviews', 'users', 'settings', 'integrations', 'notifications'];
+
+  const columns = [
+    { key: 'at', label: 'Vaqt', render: (r) => <span style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>{fmtTime(r.at)}</span> },
+    { key: 'actor', label: 'Foydalanuvchi', render: (r) => (
+      <div>
+        <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{r.actorEmail || '—'}</div>
+        <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{r.actorRole}</div>
+      </div>
+    ) },
+    { key: 'action', label: 'Amal', render: (r) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ font: `700 10.5px ui-monospace, monospace`, color: `oklch(0.45 0.14 ${methodHue[r.method] || 250})`, background: `oklch(0.96 0.04 ${methodHue[r.method] || 250})`, padding: '3px 7px', borderRadius: 6 }}>{r.method}</span>
+        <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{r.entity}{r.entityId ? ' · ' + r.entityId : ''}</span>
+      </div>
+    ) },
+    { key: 'status', label: 'Holat', align: 'center', render: (r) => {
+      const hue = r.status < 300 ? 155 : r.status < 500 ? 70 : 25;
+      return <span style={{ font: `600 11.5px ${window.GO.font}`, color: `oklch(0.42 0.12 ${hue})`, background: `oklch(0.95 0.04 ${hue})`, padding: '3px 9px', borderRadius: 999 }}>{r.status}</span>;
+    } },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <select className="adm-select" value={entity} onChange={(e) => setEntity(e.target.value)}>
+            {entities.map((x) => <option key={x} value={x}>{x === 'all' ? "Barcha bo'limlar" : x}</option>)}
+          </select>
+          <SearchInput value={actor} onChange={setActor} placeholder="Foydalanuvchi (email)" width={220} />
+        </div>
+        <Btn kind="ghost" sm onClick={load}><IconRefresh size={15} /> Yangilash</Btn>
+      </div>
+      {err
+        ? <Card pad={20} style={{ color: 'oklch(0.5 0.16 25)', font: `500 13px ${window.GO.font}` }}>{err}</Card>
+        : <DataTable columns={columns} rows={rows || []} rowKey={(r) => r.id} empty={rows ? 'Yozuvlar topilmadi' : 'Yuklanmoqda…'} />}
+    </div>
+  );
+}
+
 function SettingsScreen() {
   const tabs = [
     { id: 'platform', label: "Platforma" },
@@ -3510,6 +3569,7 @@ function SettingsScreen() {
     { id: 'payouts', label: "To'lovlar" },
     { id: 'integrations', label: "Integratsiyalar" },
     { id: 'team', label: "Jamoa" },
+    { id: 'audit', label: "Audit jurnali" },
   ];
   const [tab, setTab] = React.useState('platform');
   return (
@@ -3531,6 +3591,7 @@ function SettingsScreen() {
         {tab === 'payouts' && <PayoutsTab />}
         {tab === 'integrations' && <IntegrationsTab />}
         {tab === 'team' && <TeamTab />}
+        {tab === 'audit' && <AuditTab />}
       </div>
     </div>
   );

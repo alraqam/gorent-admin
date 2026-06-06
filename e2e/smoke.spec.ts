@@ -33,5 +33,10 @@ test('login, dashboard, products, and user management', async ({ page }) => {
   await page.getByRole('button', { name: "Qo'shish", exact: true }).click();
   await expect(page.getByText(email)).toBeVisible();
 
+  // 6) Audit log tab shows recorded actions.
+  await page.getByRole('button', { name: 'Audit jurnali' }).click();
+  await expect(page.getByText('Vaqt')).toBeVisible();
+  await expect(page.getByText('operator@gorent.uz').first()).toBeVisible();
+
   expect(errors, 'no console/page errors').toEqual([]);
 });
