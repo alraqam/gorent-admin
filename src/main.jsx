@@ -2919,10 +2919,10 @@ function HostsScreen({ search }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
-        <StatCard icon={<IconUsers size={17} />} label="Jami mezbonlar" value={String(window.HOSTS.length)} unit="ta" delta={6.2} />
-        <StatCard icon={<IconShield size={17} />} label="Tasdiqlangan" value={String(window.HOSTS.filter((h) => h.verified).length)} unit="ta" delta={4.0} />
-        <StatCard icon={<IconStar size={17} />} label="Yulduz mezbonlar" value={String(window.HOSTS.filter((h) => h.super).length)} unit="ta" delta={2.1} />
-        <StatCard icon={<IconClock size={17} />} label="Tasdiq kutmoqda" value={String(window.HOSTS.filter((h) => !h.verified).length)} unit="ta" delta={-1} deltaInvert />
+        <StatCard icon={<IconUsers size={17} />} label="Jami mezbonlar" value={String(window.HOSTS.length)} unit="ta" />
+        <StatCard icon={<IconShield size={17} />} label="Tasdiqlangan" value={String(window.HOSTS.filter((h) => h.verified).length)} unit="ta" />
+        <StatCard icon={<IconStar size={17} />} label="Yulduz mezbonlar" value={String(window.HOSTS.filter((h) => h.super).length)} unit="ta" />
+        <StatCard icon={<IconClock size={17} />} label="Tasdiq kutmoqda" value={String(window.HOSTS.filter((h) => !h.verified).length)} unit="ta" deltaInvert />
       </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(h) => setDetail(h)} />
       <HostDetailDrawer h={detail} onClose={() => setDetail(null)} />
@@ -3023,10 +3023,10 @@ function CustomersScreen({ search }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
-        <StatCard icon={<IconUser size={17} />} label="Jami mijozlar" value={String(rows.length + 318)} unit="ta" delta={11.3} />
-        <StatCard icon={<IconHome size={17} />} label="Doimiy mijozlar" value={String(rows.filter((c) => c.bookings > 1).length + 42)} unit="ta" delta={5.4} />
-        <StatCard icon={<IconCal size={17} />} label="O'rtacha muddat" value="4,2" unit="oy" delta={1.8} />
-        <StatCard icon={<IconWallet size={17} />} label="O'rtacha chek" value={window.fmtCompactSom(Math.round(window.BOOKINGS.reduce((s, b) => s + b.total, 0) / window.BOOKINGS.length))} unit="so'm" delta={3.2} />
+        <StatCard icon={<IconUser size={17} />} label="Jami mijozlar" value={String(rows.length)} unit="ta" />
+        <StatCard icon={<IconHome size={17} />} label="Doimiy mijozlar" value={String(rows.filter((c) => c.bookings > 1).length)} unit="ta" />
+        <StatCard icon={<IconCal size={17} />} label="O'rtacha muddat" value={window.BOOKINGS.length ? (window.BOOKINGS.reduce((s, b) => s + b.months, 0) / window.BOOKINGS.length).toFixed(1) : '0'} unit="oy" />
+        <StatCard icon={<IconWallet size={17} />} label="O'rtacha chek" value={window.BOOKINGS.length ? window.fmtCompactSom(Math.round(window.BOOKINGS.reduce((s, b) => s + b.total, 0) / window.BOOKINGS.length)) : '0'} unit="so'm" />
       </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.name} onRow={(c) => setDetail(c)} />
       <CustomerDetailDrawer c={detail} onClose={() => setDetail(null)} />
@@ -3052,9 +3052,9 @@ function RevenueScreen({ search }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
-        <StatCard icon={<IconWallet size={17} />} label="Yalpi aylanma" value={window.fmtCompactSom(window.totalRevenue)} unit="so'm" delta={12.4} spark={window.revenueSeries.map((d) => d.value)} />
-        <StatCard icon={<IconChart size={17} />} label="Platforma komissiyasi" value={window.fmtCompactSom(platformFee)} unit="so'm" delta={12.4} spark={window.revenueSeries.map((d) => d.value * 0.12)} />
-        <StatCard icon={<IconCheck2 size={17} />} label="To'langan" value={window.fmtCompactSom(window.PAYOUTS.filter((p) => p.status === 'paid').reduce((s, p) => s + p.amount, 0))} unit="so'm" delta={8.0} />
+        <StatCard icon={<IconWallet size={17} />} label="Yalpi aylanma" value={window.fmtCompactSom(window.totalRevenue)} unit="so'm" spark={window.revenueSeries.map((d) => d.value)} />
+        <StatCard icon={<IconChart size={17} />} label="Platforma komissiyasi" value={window.fmtCompactSom(platformFee)} unit="so'm" spark={window.revenueSeries.map((d) => d.value * 0.12)} />
+        <StatCard icon={<IconCheck2 size={17} />} label="To'langan" value={window.fmtCompactSom(window.PAYOUTS.filter((p) => p.status === 'paid').reduce((s, p) => s + p.amount, 0))} unit="so'm" />
         <StatCard icon={<IconClock size={17} />} label="Kutilayotgan" value={window.fmtCompactSom(window.PAYOUTS.filter((p) => p.status !== 'paid').reduce((s, p) => s + p.amount, 0))} unit="so'm" delta={-3} deltaInvert />
       </div>
 
