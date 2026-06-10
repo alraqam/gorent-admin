@@ -2356,7 +2356,7 @@ function ProductsScreen({ search, openForm, role }) {
       <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}>
         <IconBtn title={window.AT.view} onClick={() => setDetail(p)}><IconEye size={16} /></IconBtn>
         <IconBtn title={window.AT.edit} onClick={() => openForm(p)}><IconEdit size={16} /></IconBtn>
-        <IconBtn title="Boshqa"><IconDots size={16} /></IconBtn>
+        <IconBtn title={window.AT.delete} style={{ color: 'oklch(0.55 0.16 25)' }} onClick={() => window.confirm(`"${p.title}" mahsulotini o'chirasizmi?`) && gorentMutate(() => api.del(`/products/${p.id}`))}><IconTrash size={16} /></IconBtn>
       </div>
     ) },
   ];
@@ -2465,7 +2465,7 @@ function ProductDetailDrawer({ p, onClose, onEdit }) {
           <div style={{ display: 'flex', gap: 10, padding: '16px 24px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
             {p.status === 'pending'
               ? <><Btn kind="primary" style={{ flex: 1 }} onClick={async () => { await gorentMutate(() => api.post(`/products/${p.id}/approve`)); onClose(); }}><IconCheck2 size={16} /> {window.AT.approve}</Btn><Btn kind="danger" style={{ flex: 1 }} onClick={async () => { await gorentMutate(() => api.post(`/products/${p.id}/reject`)); onClose(); }}><IconX2 size={16} /> {window.AT.reject}</Btn></>
-              : <><Btn kind="ghost" style={{ flex: 1 }} onClick={() => onEdit(p)}><IconEdit size={16} /> {window.AT.edit}</Btn><Btn kind="primary" style={{ flex: 1 }}><IconExternal size={16} /> Saytda ochish</Btn></>}
+              : <><Btn kind="danger" style={{}} onClick={async () => { if (window.confirm(`"${p.title}" mahsulotini o'chirasizmi?`)) { await gorentMutate(() => api.del(`/products/${p.id}`)); onClose(); } }}><IconTrash size={16} /></Btn><Btn kind="ghost" style={{ flex: 1 }} onClick={() => onEdit(p)}><IconEdit size={16} /> {window.AT.edit}</Btn><Btn kind="primary" style={{ flex: 1 }}><IconExternal size={16} /> Saytda ochish</Btn></>}
           </div>
         </>
       )}
@@ -2660,7 +2660,7 @@ function StatusChips({ dict, value, setValue, counts }) {
 }
 
 // ═══ BOOKINGS ═══════════════════════════════════════════════
-function BookingDetailDrawer({ b, onClose }) {
+function BookingDetailDrawer({ b, onClose, onEdit }) {
   if (!b) return <Drawer open={false} onClose={onClose} width={520}><div /></Drawer>;
   const fee = Math.round(b.total * 0.12);
   const payout = b.total - fee;
@@ -2750,15 +2750,137 @@ function BookingDetailDrawer({ b, onClose }) {
       <div style={{ display: 'flex', gap: 10, padding: '16px 22px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
         {b.status === 'pending'
           ? <><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/bookings/${b.id}/approve`)); onClose(); }}><IconCheck2 size={16} /> {window.AT.approve}</Btn><Btn kind="danger" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/bookings/${b.id}/reject`)); onClose(); }}><IconX2 size={16} /> {window.AT.reject}</Btn></>
-          : <><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }}><IconDownload size={16} /> Chek</Btn><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }}><IconExternal size={16} /> Mahsulotni ochish</Btn></>}
+          : <><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }}><IconDownload size={16} /> Chek</Btn><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => onEdit && onEdit(b)}><IconEdit size={16} /> {window.AT.edit}</Btn>{['active','confirmed'].includes(b.status) && <Btn kind="danger" style={{ justifyContent: 'center' }} onClick={async () => { if (window.confirm(`${b.id} bandlovni bekor qilasizmi?`)) { await gorentMutate(() => api.post(`/bookings/${b.id}/cancel`)); onClose(); } }}><IconX2 size={16} /></Btn>}</>}
       </div>
     </Drawer>
   );
 }
 
-function BookingsScreen({ search, role }) {
+function BookingForm({ booking, onClose, onSave }) {
+  const isEdit = !!booking;
+  const [f, setF] = React.useState(() => booking ? {
+    customer: booking.customer, company: booking.company, phone: booking.phone || '',
+    productId: booking.product.id, months: booking.months,
+    start: booking.start, status: booking.status,
+  } : {
+    customer: '', company: '', phone: '', productId: window.PRODUCTS[0]?.id || '',
+    months: 1, start: '', status: 'pending',
+  });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
+  const selectedProduct = window.PRODUCTS.find((p) => p.id === f.productId);
+
+  const submit = async () => {
+    if (!f.customer.trim() || !f.productId) return;
+    setBusy(true);
+    try {
+      await gorentMutate(() => api.post('/bookings', { ...f, months: Number(f.months) }));
+      onSave();
+    } catch (e) { window.alert(e.message); setBusy(false); }
+  };
+
+  return (
+    <div style={{ maxWidth: 860, margin: '0 auto' }}>
+      <button onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--g-ink-3)', font: `600 13px ${window.GO.font}`, marginBottom: 16, padding: 0 }}>
+        <IconChevL size={16} /> {window.AT.back}
+      </button>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 24, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <Card>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Mijoz ma'lumotlari</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+              <div>
+                <Label>Ism familiya</Label>
+                <input className="adm-input" value={f.customer} onChange={(e) => set('customer', e.target.value)} placeholder="Bekzod Yusupov" />
+              </div>
+              <div>
+                <Label>Kompaniya</Label>
+                <input className="adm-input" value={f.company} onChange={(e) => set('company', e.target.value)} placeholder="Epam Systems" />
+              </div>
+            </div>
+            <div>
+              <Label>Telefon raqami</Label>
+              <input className="adm-input" value={f.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+998901234567" />
+            </div>
+          </Card>
+
+          <Card>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Mahsulot va muddat</div>
+            <div style={{ marginBottom: 14 }}>
+              <Label>Mahsulot</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.productId} onChange={(e) => set('productId', e.target.value)}>
+                {window.PRODUCTS.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div>
+                <Label>Boshlanish sanasi</Label>
+                <input className="adm-input" value={f.start} onChange={(e) => set('start', e.target.value)} placeholder="01.07.2026" />
+              </div>
+              <div>
+                <Label>Muddat (oy)</Label>
+                <input className="adm-input" type="number" min={1} max={24} value={f.months} onChange={(e) => set('months', Number(e.target.value))} />
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Holat</div>
+            <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+              {Object.entries(window.BOOKING_STATUS).map(([k, v]) => {
+                const active = f.status === k;
+                return (
+                  <button key={k} onClick={() => set('status', k)} style={{
+                    padding: '7px 14px', borderRadius: 8, cursor: 'pointer', font: `600 12.5px ${window.GO.font}`,
+                    border: '1.5px solid', borderColor: active ? `oklch(0.52 0.13 ${v.hue})` : 'var(--g-line)',
+                    background: active ? `oklch(0.95 0.04 ${v.hue})` : 'var(--g-card)',
+                    color: active ? `oklch(0.35 0.1 ${v.hue})` : 'var(--g-ink-3)',
+                  }}>{v.label}</button>
+                );
+              })}
+            </div>
+          </Card>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {selectedProduct && (
+            <Card>
+              <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 12 }}>Tanlangan mahsulot</div>
+              <div style={{ width: '100%', height: 100, borderRadius: 10, overflow: 'hidden', marginBottom: 10 }}><PhotoPlaceholder hue={selectedProduct.hue} label={selectedProduct.title} radius={10} /></div>
+              <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 4 }}>{selectedProduct.title}</div>
+              <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 8 }}>{selectedProduct.district}, {selectedProduct.city}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+                <span>Oylik narx</span>
+                <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{window.fmtCompactSom(selectedProduct.price)} so'm</span>
+              </div>
+              {f.months > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
+                  <span>Jami ({f.months} oy)</span>
+                  <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(selectedProduct.price * f.months)} so'm</span>
+                </div>
+              )}
+            </Card>
+          )}
+
+          <Card>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <Btn kind="primary" style={{ justifyContent: 'center' }} onClick={submit} disabled={busy || !f.customer.trim() || !f.productId}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+              <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BookingsScreen({ search, role, route, setRoute }) {
   const [status, setStatus] = React.useState('all');
-  const [detail, setDetail] = React.useState(null);
+  const detail = route.sub === 'detail' ? (window.BOOKINGS.find((b) => b.id === route.id) || null) : null;
+  const openDetail = (b) => setRoute({ section: 'bookings', sub: 'detail', id: b.id });
+  const closeDetail = () => setRoute({ section: 'bookings' });
   let rows = window.BOOKINGS.filter((b) => status === 'all' || b.status === status);
   if (role === 'host') rows = rows.filter((_, i) => i % 2 === 0);
   if (search) rows = rows.filter((b) => (b.id + b.customer + b.company + b.product.title).toLowerCase().includes(search.toLowerCase()));
@@ -2785,8 +2907,8 @@ function BookingsScreen({ search, role }) {
     { key: 'act', label: '', align: 'right', render: (b) => (
       <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}>
         {b.status === 'pending' && <IconBtn title="Tasdiqlash" onClick={() => gorentMutate(() => api.post(`/bookings/${b.id}/approve`))} style={{ color: 'oklch(0.52 0.13 155)' }}><IconCheck2 size={16} /></IconBtn>}
-        <IconBtn title="Ko'rish" onClick={() => setDetail(b)}><IconEye size={16} /></IconBtn>
-        <IconBtn title="Boshqa"><IconDots size={16} /></IconBtn>
+        <IconBtn title="Ko'rish" onClick={() => openDetail(b)}><IconEye size={16} /></IconBtn>
+        <IconBtn title="Tahrirlash" onClick={(e) => { e.stopPropagation(); setRoute({ section: 'bookings', sub: 'edit', id: b.id }); }}><IconEdit size={16} /></IconBtn>
       </div>
     ) },
   ];
@@ -2797,14 +2919,14 @@ function BookingsScreen({ search, role }) {
         <StatusChips dict={window.BOOKING_STATUS} value={status} setValue={setStatus} counts={counts} />
         <Btn kind="ghost" sm><IconDownload size={15} /> {window.AT.export}</Btn>
       </div>
-      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(b) => setDetail(b)} />
-      <BookingDetailDrawer b={detail} onClose={() => setDetail(null)} />
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(b) => openDetail(b)} />
+      <BookingDetailDrawer b={detail} onClose={closeDetail} onEdit={(b) => setRoute({ section: 'bookings', sub: 'edit', id: b.id })} />
     </div>
   );
 }
 
 // ═══ HOSTS ══════════════════════════════════════════════════
-function HostDetailDrawer({ h, onClose, openProduct }) {
+function HostDetailDrawer({ h, onClose, openProduct, onEdit }) {
   if (!h) return <Drawer open={false} onClose={onClose} width={560}><div /></Drawer>;
   const listings = window.PRODUCTS.filter((_, pi) => pi % window.HOSTS.length === window.HOSTS.indexOf(h));
   const payout = window.PAYOUTS.find((p) => p.host.id === h.id);
@@ -2882,14 +3004,92 @@ function HostDetailDrawer({ h, onClose, openProduct }) {
 
       <div style={{ display: 'flex', gap: 10, padding: '16px 22px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
         {h.verified
-          ? <><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }}><IconMessage size={16} /> Xabar yuborish</Btn><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }}><IconExternal size={16} /> Profilni ochish</Btn></>
-          : <><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/hosts/${h.id}/approve`)); onClose(); }}><IconCheck2 size={16} /> Mezbonni tasdiqlash</Btn><Btn kind="danger" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/hosts/${h.id}/reject`)); onClose(); }}><IconX2 size={16} /> Rad etish</Btn></>}
+          ? <><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => onEdit && onEdit(h)}><IconEdit size={16} /> {window.AT.edit}</Btn><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }}><IconExternal size={16} /> Profilni ochish</Btn></>
+          : <><Btn kind="ghost" style={{}} onClick={() => onEdit && onEdit(h)}><IconEdit size={16} /></Btn><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/hosts/${h.id}/approve`)); onClose(); }}><IconCheck2 size={16} /> Mezbonni tasdiqlash</Btn><Btn kind="danger" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/hosts/${h.id}/reject`)); onClose(); }}><IconX2 size={16} /> Rad etish</Btn></>}
       </div>
     </Drawer>
   );
 }
 
-function HostsScreen({ search }) {
+function HostForm({ host, onClose, onSave }) {
+  const isEdit = !!host;
+  const [f, setF] = React.useState(() => host ? {
+    name: host.name, org: host.org, city: host.city, payout: host.payout,
+  } : { name: '', org: '', city: window.CITIES[0] || 'Toshkent', payout: 'UZCARD' });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
+
+  const submit = async () => {
+    if (!f.name.trim() || !f.org.trim()) return;
+    setBusy(true);
+    try {
+      if (isEdit) await gorentMutate(() => api.put(`/hosts/${host.id}`, f));
+      else await gorentMutate(() => api.post('/hosts', f));
+      onSave();
+    } catch (e) { window.alert(e.message); setBusy(false); }
+  };
+
+  const PAYOUT_METHODS = ['UZCARD', 'HUMO', "Naqd pul", 'Bank o\'tkazmasi'];
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <button onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--g-ink-3)', font: `600 13px ${window.GO.font}`, marginBottom: 16, padding: 0 }}>
+        <IconChevL size={16} /> {window.AT.back}
+      </button>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 24, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <Card>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Mezbon ma'lumotlari</div>
+            <div style={{ marginBottom: 14 }}>
+              <Label>Ism familiya</Label>
+              <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="Aziza Rashidova" />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <Label>Tashkilot / Kompaniya</Label>
+              <input className="adm-input" value={f.org} onChange={(e) => set('org', e.target.value)} placeholder="AR Estate" />
+            </div>
+            <div>
+              <Label>Shahar</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.city} onChange={(e) => set('city', e.target.value)}>
+                {window.CITIES.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+          </Card>
+          <Card>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>To'lov usuli</div>
+            <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+              {PAYOUT_METHODS.map((m) => (
+                <button key={m} onClick={() => set('payout', m)} style={{
+                  padding: '8px 16px', borderRadius: 9, cursor: 'pointer', font: `600 12.5px ${window.GO.font}`,
+                  border: '1.5px solid', borderColor: f.payout === m ? 'var(--g-brand)' : 'var(--g-line)',
+                  background: f.payout === m ? 'var(--g-brand-soft)' : 'var(--g-card)',
+                  color: f.payout === m ? 'var(--g-brand-ink)' : 'var(--g-ink-3)',
+                }}>{m}</button>
+              ))}
+            </div>
+          </Card>
+        </div>
+        <Card>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Btn kind="primary" style={{ justifyContent: 'center' }} onClick={submit} disabled={busy || !f.name.trim() || !f.org.trim()}>
+              <IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}
+            </Btn>
+            <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
+          </div>
+          {isEdit && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--g-line)' }}>
+              <div style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 4 }}>Mezbon ID</div>
+              <div style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{host.id}</div>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function HostsScreen({ search, route, setRoute }) {
   const [detail, setDetail] = React.useState(null);
   let rows = window.HOSTS;
   if (search) rows = rows.filter((h) => (h.name + h.org + h.city).toLowerCase().includes(search.toLowerCase()));
@@ -2914,7 +3114,7 @@ function HostsScreen({ search }) {
     { key: 'verif', label: window.AT.status, render: (h) => h.verified
       ? <StatusPill s="active" dict={{ active: { label: 'Tasdiqlangan', hue: 155 } }} />
       : <StatusPill s="x" dict={{ x: { label: 'Kutilmoqda', hue: 70 } }} /> },
-    { key: 'act', label: '', align: 'right', render: (h) => <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}><IconBtn onClick={() => setDetail(h)}><IconEye size={16} /></IconBtn><IconBtn><IconDots size={16} /></IconBtn></div> },
+    { key: 'act', label: '', align: 'right', render: (h) => <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}><IconBtn title={window.AT.view} onClick={() => setDetail(h)}><IconEye size={16} /></IconBtn><IconBtn title={window.AT.edit} onClick={() => setRoute({ section: 'hosts', sub: 'edit', id: h.id })}><IconEdit size={16} /></IconBtn></div> },
   ];
   return (
     <div>
@@ -2925,7 +3125,7 @@ function HostsScreen({ search }) {
         <StatCard icon={<IconClock size={17} />} label="Tasdiq kutmoqda" value={String(window.HOSTS.filter((h) => !h.verified).length)} unit="ta" deltaInvert />
       </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(h) => setDetail(h)} />
-      <HostDetailDrawer h={detail} onClose={() => setDetail(null)} />
+      <HostDetailDrawer h={detail} onClose={() => setDetail(null)} onEdit={(h) => setRoute({ section: 'hosts', sub: 'edit', id: h.id })} />
     </div>
   );
 }
@@ -3002,13 +3202,19 @@ function CustomerDetailDrawer({ c, onClose }) {
 
 function CustomersScreen({ search }) {
   const [detail, setDetail] = React.useState(null);
-  // Aggregate customers from bookings
-  const map = {};
-  window.BOOKINGS.forEach((b) => {
-    if (!map[b.customer]) map[b.customer] = { name: b.customer, company: b.company, hue: b.cust_hue, bookings: 0, spent: 0, city: b.product.city };
-    map[b.customer].bookings += 1; map[b.customer].spent += b.total;
-  });
-  let rows = Object.values(map);
+  const fallback = React.useMemo(() => {
+    const map = {};
+    window.BOOKINGS.forEach((b) => {
+      if (!map[b.customer]) map[b.customer] = { name: b.customer, company: b.company, hue: b.cust_hue, bookings: 0, spent: 0, city: b.product.city };
+      map[b.customer].bookings += 1; map[b.customer].spent += b.total;
+    });
+    return Object.values(map);
+  }, []);
+  const [apiRows, setApiRows] = React.useState(null);
+  React.useEffect(() => {
+    api.get('/customers').then((data) => { if (data && data.length > 0) setApiRows(data); }).catch(() => {});
+  }, []);
+  let rows = apiRows || fallback;
   if (search) rows = rows.filter((c) => (c.name + c.company).toLowerCase().includes(search.toLowerCase()));
   const columns = [
     { key: 'cust', label: 'Mijoz', render: (c) => <PersonCell name={c.name} sub={c.company} hue={c.hue} /> },
@@ -3132,9 +3338,8 @@ function ReviewsScreen({ search }) {
               <StatusPill s={r.state} dict={dict} size="sm" />
               <div style={{ display: 'flex', gap: 7 }}>
                 {r.state !== 'published' && <Btn kind="soft" sm onClick={() => gorentMutate(() => api.post(`/reviews/${r.id}/approve`))}><IconCheck2 size={14} /> Tasdiqlash</Btn>}
-                {r.state === 'flagged'
-                  ? <Btn kind="danger" sm onClick={() => gorentMutate(() => api.del(`/reviews/${r.id}`))}><IconTrash size={14} /> O'chirish</Btn>
-                  : <Btn kind="ghost" sm onClick={() => gorentMutate(() => api.post(`/reviews/${r.id}/flag`))}><IconFlag size={14} /> Belgilash</Btn>}
+                {r.state !== 'flagged' && <Btn kind="ghost" sm onClick={() => gorentMutate(() => api.post(`/reviews/${r.id}/flag`))}><IconFlag size={14} /> Belgilash</Btn>}
+                <Btn kind="danger" sm onClick={() => window.confirm(`"${r.author}" sharhini o'chirasizmi?`) && gorentMutate(() => api.del(`/reviews/${r.id}`))}><IconTrash size={14} /> O'chirish</Btn>
               </div>
             </div>
           </Card>
@@ -3635,7 +3840,47 @@ function AdminApp() {
   const [t, setTweak] = useTweaks(ADMIN_TWEAKS);
   React.useEffect(() => { window.__tweaks = t; }, [t]);
 
-  const [route, setRoute] = React.useState({ section: 'overview' });
+  // Section ↔ URL sync. Keeps the URL in sync with navigation so refresh and
+  // back/forward work, and sections are bookmarkable/shareable.
+  const SECTIONS = ['overview','products','bookings','hosts','customers','revenue','reviews','settings'];
+  const routeFromPath = () => {
+    const parts = window.location.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
+    const section = SECTIONS.includes(parts[0]) ? parts[0] : 'overview';
+    if (section === 'bookings') {
+      if (parts[1] === 'add') return { section, sub: 'add' };
+      if (parts[1] === 'edit' && parts[2]) return { section, sub: 'edit', id: parts[2] };
+      if (parts[1]) return { section, sub: 'detail', id: parts[1] };
+    }
+    if (section === 'hosts') {
+      if (parts[1] === 'add') return { section, sub: 'add' };
+      if (parts[1] === 'edit' && parts[2]) return { section, sub: 'edit', id: parts[2] };
+    }
+    return { section };
+  };
+  const [route, setRouteRaw] = React.useState(routeFromPath);
+  const setRoute = React.useCallback((r) => {
+    setRouteRaw(r);
+    let target;
+    if (r.section === 'bookings' && r.sub) {
+      if (r.sub === 'add') target = '/bookings/add';
+      else if (r.sub === 'edit' && r.id) target = `/bookings/edit/${r.id}`;
+      else if (r.sub === 'detail' && r.id) target = `/bookings/${r.id}`;
+      else target = '/bookings';
+    } else if (r.section === 'hosts' && r.sub) {
+      if (r.sub === 'add') target = '/hosts/add';
+      else if (r.sub === 'edit' && r.id) target = `/hosts/edit/${r.id}`;
+      else target = '/hosts';
+    } else {
+      const section = r.section || 'overview';
+      target = '/' + (section === 'overview' ? '' : section);
+    }
+    if (window.location.pathname !== target) window.history.pushState(r, '', target);
+  }, []);
+  React.useEffect(() => {
+    const onPop = () => setRouteRaw(routeFromPath());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   // Re-fetch all data after a mutation and force a re-render. Bound globally so
   // any component can trigger a refresh via gorentMutate() without prop drilling.
   const [, setDataVersion] = React.useState(0);
@@ -3685,8 +3930,14 @@ function AdminApp() {
     switch (route.section) {
       case 'overview':  return <Overview variant={t.dashboardLayout} setLayout={(v) => setTweak('dashboardLayout', v)} setRoute={setRoute} />;
       case 'products':  return <ProductsScreen search={search} role={role} openForm={(p) => setFormOpen({ product: p })} />;
-      case 'bookings':  return <BookingsScreen search={search} role={role} />;
-      case 'hosts':     return <HostsScreen search={search} />;
+      case 'bookings':
+        if (route.sub === 'add') return <BookingForm booking={null} onClose={() => setRoute({ section: 'bookings' })} onSave={() => setRoute({ section: 'bookings' })} />;
+        if (route.sub === 'edit') return <BookingForm booking={window.BOOKINGS.find((b) => b.id === route.id) || null} onClose={() => setRoute({ section: 'bookings' })} onSave={() => setRoute({ section: 'bookings' })} />;
+        return <BookingsScreen search={search} role={role} route={route} setRoute={setRoute} />;
+      case 'hosts':
+        if (route.sub === 'add') return <HostForm host={null} onClose={() => setRoute({ section: 'hosts' })} onSave={() => setRoute({ section: 'hosts' })} />;
+        if (route.sub === 'edit') return <HostForm host={window.HOSTS.find((h) => h.id === route.id) || null} onClose={() => setRoute({ section: 'hosts' })} onSave={() => setRoute({ section: 'hosts' })} />;
+        return <HostsScreen search={search} route={route} setRoute={setRoute} />;
       case 'customers': return <CustomersScreen search={search} />;
       case 'revenue':   return <RevenueScreen search={search} />;
       case 'reviews':   return <ReviewsScreen search={search} />;
@@ -3695,11 +3946,31 @@ function AdminApp() {
     }
   }
 
-  const topActions = route.section === 'products'
+  const isBookingsSub = route.section === 'bookings' && route.sub;
+  const isHostsSub = route.section === 'hosts' && route.sub;
+  const topActions = formOpen
+    ? null
+    : isBookingsSub || isHostsSub
+    ? null
+    : route.section === 'products'
     ? <Btn kind="primary" sm onClick={() => setFormOpen({ product: null })}><IconPlus size={15} /> {window.AT.addProduct}</Btn>
+    : route.section === 'bookings'
+    ? <Btn kind="primary" sm onClick={() => setRoute({ section: 'bookings', sub: 'add' })}><IconPlus size={15} /> Bandlov qo'shish</Btn>
+    : route.section === 'hosts'
+    ? <Btn kind="primary" sm onClick={() => setRoute({ section: 'hosts', sub: 'add' })}><IconPlus size={15} /> Mezbon qo'shish</Btn>
     : null;
 
   const formTitle = formOpen ? (formOpen.product ? "Mahsulotni tahrirlash" : "Yangi mahsulot") : null;
+  const pageTitle = formTitle
+    || (route.section === 'bookings' && route.sub === 'add' ? "Yangi bandlov"
+      : route.section === 'bookings' && route.sub === 'edit' ? "Bandlovni tahrirlash"
+      : route.section === 'bookings' && route.sub === 'detail' ? (route.id || 'Bandlov')
+      : route.section === 'hosts' && route.sub === 'add' ? "Yangi mezbon"
+      : route.section === 'hosts' && route.sub === 'edit' ? "Mezbonni tahrirlash"
+      : meta.title());
+  const pageSub = formOpen ? "Barcha maydonlarni to'ldiring"
+    : (isBookingsSub || isHostsSub) ? ""
+    : meta.sub();
 
   return (
     <div data-density={t.density} style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', background: 'var(--g-bg)' }}>
@@ -3707,11 +3978,11 @@ function AdminApp() {
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%' }}>
         <Topbar
-          title={formTitle || meta.title()}
-          sub={formOpen ? "Barcha maydonlarni to'ldiring" : meta.sub()}
+          title={pageTitle}
+          sub={pageSub}
           role={role} onRole={setRole}
           search={search} setSearch={setSearch}
-          actions={formOpen ? null : topActions}
+          actions={topActions}
           onNavigate={(section) => setRoute({ section })}
         />
         <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 28 }}>

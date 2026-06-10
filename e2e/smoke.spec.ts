@@ -15,9 +15,10 @@ test('login, dashboard, products, and user management', async ({ page }) => {
   // 2) Dashboard renders with live data.
   await expect(page.getByText('Jami daromad')).toBeVisible();
 
-  // 3) Products table renders.
+  // 3) Products table renders and URL updates.
   await page.getByRole('button', { name: 'Mahsulotlar' }).click();
   await expect(page.getByText('ta mahsulot').first()).toBeVisible();
+  await expect(page).toHaveURL(/\/products/);
 
   // 4) Settings → Jamoa lists real users.
   await page.getByRole('button', { name: 'Sozlamalar' }).click();
