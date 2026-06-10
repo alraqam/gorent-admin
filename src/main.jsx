@@ -1165,7 +1165,7 @@ const avgRating = Number((PRODUCTS.reduce((s, p) => s + p.rating, 0) / PRODUCTS.
 
 const KPIS = [
   { id: 'rev',  label: "Jami daromad",   value: fmtCompactSom(totalRevenue), unit: "so'm", delta: +12.4, spark: revenueSeries.map((d) => d.value) },
-  { id: 'book', label: "Faol bandlovlar", value: String(activeBookings + 124), unit: "ta",   delta: +8.1,  spark: bookingsSeries.map((d) => d.value) },
+  { id: 'book', label: "Faol bandlovlar", value: String(activeBookings), unit: "ta", spark: bookingsSeries.map((d) => d.value) },
   { id: 'occ',  label: "Bandlik darajasi", value: avgOccupancy + "%", unit: "", delta: +3.6, spark: [62,64,61,66,69,71,70,73,72,74,76,avgOccupancy] },
   { id: 'pend', label: "Tasdiqlash navbati", value: String(pendingApproval), unit: "ta", delta: -2, deltaInvert: true, spark: [9,7,8,6,7,5,6,5,4,5,4,pendingApproval] },
 ];
@@ -2044,7 +2044,7 @@ function Overview({ variant, setLayout, setRoute }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
-          Salom, Operator — bugun platformada <b style={{ color: 'var(--g-ink)' }}>{window.activeBookings + 124}</b> ta faol bandlov.
+          Salom, Operator — bugun platformada <b style={{ color: 'var(--g-ink)' }}>{window.activeBookings}</b> ta faol bandlov.
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ font: `500 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Ko'rinish</span>
