@@ -6,6 +6,9 @@
 // the UI components keep working unchanged, now backed by live data.
 
 const BASE =
+  // Runtime (EasyPanel env var API_URL → written by env.sh → loaded as /env.js).
+  (typeof window !== 'undefined' && window.__GORENT_CONFIG__?.apiUrl) ||
+  // Build-time fallback (Vite dev server / local npm run dev).
   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) ||
   'http://localhost:3001/api';
 
