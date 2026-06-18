@@ -65,6 +65,35 @@ const put = (path, body) => request(path, { method: 'PUT', body: body ? JSON.str
 const patch = (path, body) => request(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined });
 const del = (path) => request(path, { method: 'DELETE' });
 
+// Multipart upload — must NOT set Content-Type (the browser adds the boundary).
+async function upload(path, file, fieldName = 'file') {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const fd = new FormData();
+  fd.append(fieldName, file);
+  const res = await fetch(BASE + path, { method: 'POST', headers, body: fd });
+  const text = await res.text();
+  let data = null;
+  if (text) { try { data = JSON.parse(text); } catch { data = text; } }
+  if (!res.ok) {
+    const msg = (data && (data.message || data.error)) || res.statusText || 'Xatolik';
+    throw new ApiError(Array.isArray(msg) ? msg.join(', ') : msg, res.status);
+  }
+  return data;
+}
+
+// Fetch an auth-gated file as a blob URL (an <a href>/<img src> can't send the
+// bearer token, so we fetch then hand back an object URL the caller can open).
+async function fileBlobUrl(path) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(BASE + path, { headers });
+  if (!res.ok) throw new ApiError('Faylni yuklab bo‘lmadi', res.status);
+  return URL.createObjectURL(await res.blob());
+}
+
 async function login(email, password) {
   const res = await post('/auth/login', { email, password });
   setToken(res.accessToken);
@@ -94,10 +123,14 @@ async function bootstrap() {
   window.SETTINGS = settings;
   window.INTEGRATIONS = integrations;
 
-  // Payouts are platform-only — skip (empty) for host accounts.
+  // Payouts, invoices and companies are platform-only — skip for host accounts.
   let payouts = [];
+  let invoices = [];
+  let companies = [];
   if (role === 'platform') {
     try { payouts = await get('/payouts'); } catch { payouts = []; }
+    try { invoices = await get('/invoices'); } catch { invoices = []; }
+    try { companies = await get('/companies'); } catch { companies = []; }
   }
 
   window.PRODUCTS = products;
@@ -105,6 +138,8 @@ async function bootstrap() {
   window.BOOKINGS = bookings;
   window.REVIEWS = reviews;
   window.PAYOUTS = payouts;
+  window.INVOICES = invoices;
+  window.COMPANIES = companies;
   window.NOTIFS = notifs;
 
   window.KPIS = overview.kpis;
@@ -124,7 +159,7 @@ async function bootstrap() {
 export const api = {
   BASE,
   getToken, setToken, clearToken, currentUser, isAuthed,
-  get, post, put, patch, del,
+  get, post, put, patch, del, upload, fileBlobUrl,
   login, logout, bootstrap,
   ApiError,
 };

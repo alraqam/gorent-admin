@@ -11,6 +11,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { api } from './api.js';
+import { eimzo } from './eimzo.js';
 
 window.React = React;
 window.ReactDOM = ReactDOM;
@@ -1547,7 +1548,9 @@ const NAV = [
   { id: 'bookings',  label: () => window.AT.navBookings,  icon: IconCal },
   { id: 'hosts',     label: () => window.AT.navHosts,     icon: IconUsers },
   { id: 'customers', label: () => window.AT.navCustomers, icon: IconUser },
+  { id: 'companies', label: () => "Kompaniyalar",         icon: IconBuilding },
   { id: 'revenue',   label: () => window.AT.navRevenue,   icon: IconWallet },
+  { id: 'invoices',  label: () => "Hisob-fakturalar",     icon: IconDoc },
   { id: 'reviews',   label: () => window.AT.navReviews,   icon: IconStar },
 ];
 
@@ -2759,11 +2762,11 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
 function BookingForm({ booking, onClose, onSave }) {
   const isEdit = !!booking;
   const [f, setF] = React.useState(() => booking ? {
-    customer: booking.customer, company: booking.company, phone: booking.phone || '',
+    customer: booking.customer, company: booking.company, companyStir: booking.companyStir || '', companyId: booking.companyId || '', phone: booking.phone || '',
     productId: booking.product.id, months: booking.months,
     start: booking.start, status: booking.status,
   } : {
-    customer: '', company: '', phone: '', productId: window.PRODUCTS[0]?.id || '',
+    customer: '', company: '', companyStir: '', companyId: '', phone: '', productId: window.PRODUCTS[0]?.id || '',
     months: 1, start: '', status: 'pending',
   });
   const [busy, setBusy] = React.useState(false);
@@ -2775,7 +2778,8 @@ function BookingForm({ booking, onClose, onSave }) {
     if (!f.customer.trim() || !f.productId) return;
     setBusy(true);
     try {
-      await gorentMutate(() => api.post('/bookings', { ...f, months: Number(f.months) }));
+      const payload = { ...f, months: Number(f.months), companyStir: f.companyStir.trim() || null, companyId: f.companyId || null };
+      await gorentMutate(() => isEdit ? api.patch(`/bookings/${booking.id}`, payload) : api.post('/bookings', payload));
       onSave();
     } catch (e) { window.alert(e.message); setBusy(false); }
   };
@@ -2796,14 +2800,38 @@ function BookingForm({ booking, onClose, onSave }) {
                 <input className="adm-input" value={f.customer} onChange={(e) => set('customer', e.target.value)} placeholder="Bekzod Yusupov" />
               </div>
               <div>
-                <Label>Kompaniya</Label>
-                <input className="adm-input" value={f.company} onChange={(e) => set('company', e.target.value)} placeholder="Epam Systems" />
+                <Label>Telefon raqami</Label>
+                <input className="adm-input" value={f.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+998901234567" />
               </div>
             </div>
             <div>
-              <Label>Telefon raqami</Label>
-              <input className="adm-input" value={f.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+998901234567" />
+              <Label>Kompaniya (ijarachi)</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.companyId}
+                onChange={(e) => {
+                  const c = (window.COMPANIES || []).find((x) => x.id === e.target.value);
+                  if (c) setF((s) => ({ ...s, companyId: c.id, company: c.name, companyStir: c.inn }));
+                  else setF((s) => ({ ...s, companyId: '' }));
+                }}>
+                <option value="">— Qo'lda kiritish —</option>
+                {(window.COMPANIES || []).map((c) => <option key={c.id} value={c.id}>{c.name} · INN {c.inn}</option>)}
+              </select>
             </div>
+            {f.companyId ? (
+              <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--g-bg)', borderRadius: 8, font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+                Hisob-faktura <b style={{ color: 'var(--g-ink)' }}>{f.company}</b> (INN {f.companyStir}) nomiga rasmiylashtiriladi.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
+                <div>
+                  <Label>Kompaniya nomi</Label>
+                  <input className="adm-input" value={f.company} onChange={(e) => set('company', e.target.value)} placeholder="Epam Systems" />
+                </div>
+                <div>
+                  <Label>Kompaniya STIR (hisob-faktura uchun)</Label>
+                  <input className="adm-input" value={f.companyStir} onChange={(e) => set('companyStir', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
+                </div>
+              </div>
+            )}
           </Card>
 
           <Card>
@@ -3296,6 +3324,294 @@ function RevenueScreen({ search }) {
   );
 }
 
+// ═══ COMPANIES (ijarachi kompaniyalar) ═════════════════════
+const COMPANY_DOC = { sent: { label: 'Yuklangan', hue: 155 }, pending: { label: "Yo'q", hue: 35 } };
+
+function CompanyDocCell({ has, num }) {
+  return (
+    <div>
+      <StatusPill s={has ? 'sent' : 'pending'} dict={COMPANY_DOC} size="sm" />
+      {num && <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 4 }}>{num}</div>}
+    </div>
+  );
+}
+
+function CompaniesScreen({ search }) {
+  const [editing, setEditing] = React.useState(null); // null | {} (new) | company (edit)
+
+  let rows = window.COMPANIES || [];
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((c) => `${c.name} ${c.inn}`.toLowerCase().includes(q));
+  }
+
+  if (editing) return <CompanyForm company={editing.id ? editing : null} onClose={() => setEditing(null)} />;
+
+  const columns = [
+    { key: 'name', label: 'Kompaniya', render: (c) => (
+      <div>
+        <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{c.name}</div>
+        <div style={{ font: `400 12px ui-monospace, monospace`, color: 'var(--g-ink-4)' }}>INN {c.inn}</div>
+      </div>
+    ) },
+    { key: 'phones', label: 'Telefon', render: (c) => <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{(c.phones || []).join(', ') || '—'}</span> },
+    { key: 'passport', label: 'Direktor pasporti', render: (c) => <CompanyDocCell has={!!c.directorPassportFile} num={c.directorPassport} /> },
+    { key: 'guvohnoma', label: 'Guvohnoma', render: (c) => <CompanyDocCell has={!!c.guvohnomaFile} num={c.guvohnoma} /> },
+    { key: 'actions', label: '', align: 'right', render: (c) => <Btn kind="ghost" sm onClick={() => setEditing(c)}><IconEdit size={14} /> Tahrirlash</Btn> },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 18 }}>
+        <Btn kind="primary" sm onClick={() => setEditing({})}><IconPlus size={15} /> Kompaniya qo'shish</Btn>
+      </div>
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty="Hozircha kompaniyalar yo'q" />
+    </div>
+  );
+}
+
+function CompanyForm({ company, onClose }) {
+  const isEdit = !!company;
+  const [f, setF] = React.useState(() => company ? {
+    name: company.name, inn: company.inn,
+    phones: company.phones?.length ? company.phones : [''],
+    directorPassport: company.directorPassport || '', guvohnoma: company.guvohnoma || '',
+  } : { name: '', inn: '', phones: [''], directorPassport: '', guvohnoma: '' });
+  const [files, setFiles] = React.useState({ passport: null, guvohnoma: null });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
+
+  const setPhone = (i, v) => setF((s) => { const p = [...s.phones]; p[i] = v; return { ...s, phones: p }; });
+  const addPhone = () => setF((s) => ({ ...s, phones: [...s.phones, ''] }));
+  const removePhone = (i) => setF((s) => ({ ...s, phones: s.phones.length > 1 ? s.phones.filter((_, idx) => idx !== i) : s.phones }));
+
+  const submit = async () => {
+    if (!f.name.trim() || !/^\d{9}$/.test(f.inn)) { window.alert('Kompaniya nomi va 9 xonali INN talab qilinadi'); return; }
+    setBusy(true);
+    try {
+      const payload = {
+        name: f.name.trim(), inn: f.inn,
+        phones: f.phones.map((p) => p.trim()).filter(Boolean),
+        directorPassport: f.directorPassport.trim() || null,
+        guvohnoma: f.guvohnoma.trim() || null,
+      };
+      const saved = isEdit ? await api.patch(`/companies/${company.id}`, payload) : await api.post('/companies', payload);
+      if (files.passport) await api.upload(`/companies/${saved.id}/files/passport`, files.passport);
+      if (files.guvohnoma) await api.upload(`/companies/${saved.id}/files/guvohnoma`, files.guvohnoma);
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      onClose();
+    } catch (e) { window.alert(e.message); setBusy(false); }
+  };
+
+  const viewFile = async (kind) => {
+    try { const url = await api.fileBlobUrl(`/companies/${company.id}/files/${kind}`); window.open(url, '_blank'); }
+    catch (e) { window.alert(e.message); }
+  };
+
+  // One KYC document row: reference number + scan upload (+ view existing scan).
+  const DocRow = ({ kind, label, numKey, hasFile }) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'end' }}>
+      <div>
+        <Label>{label} raqami</Label>
+        <input className="adm-input" value={f[numKey]} onChange={(e) => set(numKey, e.target.value)} placeholder="—" />
+      </div>
+      <div>
+        <Label>{label} skani (PDF/rasm)</Label>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setFiles((s) => ({ ...s, [kind]: e.target.files?.[0] || null }))}
+            style={{ font: `400 12px ${window.GO.font}`, flex: 1, minWidth: 0 }} />
+          {isEdit && hasFile && <Btn kind="ghost" sm onClick={() => viewFile(kind)}><IconEye size={14} /> Ko'rish</Btn>}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <button onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--g-ink-3)', font: `600 13px ${window.GO.font}`, marginBottom: 16, padding: 0 }}>
+        <IconChevL size={16} /> Orqaga
+      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>{isEdit ? 'Kompaniyani tahrirlash' : 'Yangi kompaniya'}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div>
+              <Label>Kompaniya nomi</Label>
+              <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="Epam Systems" />
+            </div>
+            <div>
+              <Label>INN (STIR)</Label>
+              <input className="adm-input" value={f.inn} onChange={(e) => set('inn', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Telefon raqamlari</div>
+            <Btn kind="ghost" sm onClick={addPhone}><IconPlus size={14} /> Qo'shish</Btn>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {f.phones.map((p, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8 }}>
+                <input className="adm-input" style={{ flex: 1 }} value={p} onChange={(e) => setPhone(i, e.target.value)} placeholder="+998901234567" />
+                {f.phones.length > 1 && <Btn kind="ghost" sm onClick={() => removePhone(i)}><IconTrash size={14} /></Btn>}
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Hujjatlar (KYC)</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <DocRow kind="passport" label="Direktor pasporti" numKey="directorPassport" hasFile={!!company?.directorPassportFile} />
+            <DocRow kind="guvohnoma" label="Guvohnoma" numKey="guvohnoma" hasFile={!!company?.guvohnomaFile} />
+          </div>
+        </Card>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={submit} disabled={busy}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+          <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { CompaniesScreen, CompanyForm });
+
+// ═══ INVOICES (ESF / didox.uz) ═════════════════════════════
+const INVOICE_STATUS = {
+  ready_to_sign: { label: "Imzolashga tayyor", hue: 70 },
+  sent:          { label: "Yuborilgan", hue: 155 },
+  error:         { label: "Xatolik", hue: 25 },
+};
+
+function currentInvoicePeriod() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function InvoicesScreen({ search }) {
+  const [period, setPeriod] = React.useState(currentInvoicePeriod());
+  const [generating, setGenerating] = React.useState(false);
+  const [signingIds, setSigningIds] = React.useState(() => new Set());
+  const [selected, setSelected] = React.useState(() => new Set());
+  const busy = signingIds.size > 0;
+
+  let rows = window.INVOICES || [];
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((inv) => `${inv.period} ${inv.booking?.id} ${inv.booking?.customer} ${inv.booking?.company}`.toLowerCase().includes(q));
+  }
+  const signable = rows.filter((r) => r.status === 'ready_to_sign');
+  const selectedList = signable.filter((r) => selected.has(r.id));
+  const allSelected = signable.length > 0 && signable.every((r) => selected.has(r.id));
+  const someSelected = !allSelected && signable.some((r) => selected.has(r.id));
+
+  const toggleOne = (id) => setSelected((prev) => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(signable.map((r) => r.id)));
+
+  const generate = async () => {
+    setGenerating(true);
+    await gorentMutate(() => api.post('/invoices/generate', { period }));
+    setGenerating(false);
+  };
+
+  // Signs one or many drafts in a single E-IMZO session: the agent + key are
+  // resolved once, then each invoice is fetched, signed locally, and submitted.
+  // Per-invoice failures are collected and reported without aborting the batch.
+  const signInvoices = async (list) => {
+    if (!list.length) return;
+    setSigningIds(new Set(list.map((inv) => inv.id)));
+    try {
+      const available = await eimzo.isAvailable();
+      if (!available) throw new Error("E-IMZO agenti topilmadi. E-IMZO dasturini ishga tushiring va qaytadan urinib ko'ring.");
+      const certs = await eimzo.listCertificates();
+      if (!certs.length) throw new Error("E-IMZO sertifikatlari topilmadi.");
+      const cert = certs[0];
+      const failures = [];
+      for (const inv of list) {
+        try {
+          const { base64 } = await api.get(`/invoices/${inv.id}/tosign`);
+          const signature = await eimzo.signBase64(base64, cert);
+          await api.post(`/invoices/${inv.id}/sign`, { signature });
+        } catch (e) {
+          failures.push(`${inv.booking?.company || inv.id}: ${e.message}`);
+        }
+      }
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      setSelected(new Set());
+      if (failures.length) window.alert(`Ba'zi hisob-fakturalar imzolanmadi:\n\n${failures.join('\n')}`);
+    } catch (e) {
+      window.alert(e.message || "Imzolashda xatolik yuz berdi");
+    } finally {
+      setSigningIds(new Set());
+    }
+  };
+
+  const columns = [
+    { key: 'sel', w: 40, label: (
+      <input type="checkbox" checked={allSelected} disabled={signable.length === 0 || busy}
+        ref={(el) => { if (el) el.indeterminate = someSelected; }}
+        onChange={toggleAll} style={{ cursor: 'pointer', width: 15, height: 15 }} />
+    ), render: (inv) => inv.status === 'ready_to_sign'
+      ? <input type="checkbox" checked={selected.has(inv.id)} disabled={busy} onChange={() => toggleOne(inv.id)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
+      : null },
+    { key: 'period', label: 'Davr', render: (inv) => <span style={{ font: `600 12.5px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{inv.period}</span> },
+    { key: 'booking', label: 'Bandlov / Xaridor', render: (inv) => <PersonCell name={inv.booking?.company || inv.booking?.customer || inv.bookingId} sub={inv.booking?.id} hue={inv.booking?.cust_hue} /> },
+    { key: 'amount', label: 'Summa', align: 'right', render: (inv) => <MoneyCell n={inv.amount} /> },
+    { key: 'status', label: window.AT.status, render: (inv) => (
+      <div>
+        <StatusPill s={inv.status} dict={INVOICE_STATUS} size="sm" />
+        {inv.status === 'error' && inv.error && <div style={{ font: `400 11px ${window.GO.font}`, color: 'oklch(0.55 0.18 25)', marginTop: 4, maxWidth: 240 }}>{inv.error}</div>}
+      </div>
+    ) },
+    { key: 'actions', label: '', align: 'right', render: (inv) => {
+      if (inv.status === 'ready_to_sign') {
+        return <Btn kind="primary" sm disabled={busy} onClick={() => signInvoices([inv])}><IconShieldCheck size={14} /> {signingIds.has(inv.id) ? 'Imzolanmoqda…' : 'E-IMZO bilan imzolash'}</Btn>;
+      }
+      if (inv.status === 'error') {
+        return <Btn kind="ghost" sm disabled={busy} onClick={() => gorentMutate(() => api.post('/invoices/generate', { period: inv.period }))}><IconRefresh size={14} /> Qayta urinish</Btn>;
+      }
+      return null;
+    } },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Label_>Davr</Label_>
+          <input className="adm-input" style={{ width: 130 }} value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="2026-06" />
+        </div>
+        <Btn kind="primary" sm disabled={generating || busy} onClick={generate}><IconDoc size={15} /> {generating ? 'Yaratilmoqda…' : "Oylik hisob-fakturalarni yaratish"}</Btn>
+      </div>
+
+      {selectedList.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 14px', marginBottom: 12, background: 'var(--g-brand-soft)', border: '1px solid var(--g-line)', borderRadius: 10 }}>
+          <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-brand-ink)' }}>{selectedList.length} ta hisob-faktura tanlandi</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn kind="ghost" sm disabled={busy} onClick={() => setSelected(new Set())}>Bekor qilish</Btn>
+            <Btn kind="primary" sm disabled={busy} onClick={() => signInvoices(selectedList)}><IconShieldCheck size={14} /> {busy ? 'Imzolanmoqda…' : `E-IMZO bilan imzolash (${selectedList.length} ta)`}</Btn>
+          </div>
+        </div>
+      )}
+
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty="Bu davr uchun hisob-fakturalar yo'q" />
+    </div>
+  );
+}
+
+function Label_({ children }) {
+  return <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{children}</span>;
+}
+
 // ═══ REVIEWS ════════════════════════════════════════════════
 function ReviewsScreen({ search }) {
   const [filter, setFilter] = React.useState('all');
@@ -3349,7 +3665,7 @@ function ReviewsScreen({ search }) {
   );
 }
 
-Object.assign(window, { BookingsScreen, HostsScreen, CustomersScreen, RevenueScreen, ReviewsScreen, StatusChips });
+Object.assign(window, { BookingsScreen, HostsScreen, CustomersScreen, RevenueScreen, InvoicesScreen, ReviewsScreen, StatusChips });
 
 // ============================================================
 // src/admin-settings.jsx
@@ -3831,7 +4147,9 @@ const SECTION_META = {
   bookings:  { title: () => window.AT.navBookings,  sub: () => `${window.BOOKINGS.length} ta bandlov` },
   hosts:     { title: () => window.AT.navHosts,     sub: () => `${window.HOSTS.length} ta mezbon` },
   customers: { title: () => window.AT.navCustomers, sub: () => "Mijozlar bazasi va segmentlar" },
+  companies: { title: () => "Kompaniyalar", sub: () => `${(window.COMPANIES || []).length} ta ijarachi kompaniya` },
   revenue:   { title: () => "Daromad va to'lovlar", sub: () => "Aylanma, komissiya va mezbon to'lovlari" },
+  invoices:  { title: () => "Hisob-fakturalar", sub: () => "Oylik ESF hisob-fakturalari · didox.uz" },
   reviews:   { title: () => "Sharhlar va moderatsiya", sub: () => `${window.REVIEWS.length} ta sharh` },
   settings:  { title: () => window.AT.navSettings, sub: () => "Platforma, komissiya, to'lovlar va integratsiyalar" },
 };
@@ -3842,7 +4160,7 @@ function AdminApp() {
 
   // Section ↔ URL sync. Keeps the URL in sync with navigation so refresh and
   // back/forward work, and sections are bookmarkable/shareable.
-  const SECTIONS = ['overview','products','bookings','hosts','customers','revenue','reviews','settings'];
+  const SECTIONS = ['overview','products','bookings','hosts','customers','companies','revenue','invoices','reviews','settings'];
   const routeFromPath = () => {
     const parts = window.location.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
     const section = SECTIONS.includes(parts[0]) ? parts[0] : 'overview';
@@ -3939,7 +4257,9 @@ function AdminApp() {
         if (route.sub === 'edit') return <HostForm host={window.HOSTS.find((h) => h.id === route.id) || null} onClose={() => setRoute({ section: 'hosts' })} onSave={() => setRoute({ section: 'hosts' })} />;
         return <HostsScreen search={search} route={route} setRoute={setRoute} />;
       case 'customers': return <CustomersScreen search={search} />;
+      case 'companies': return <CompaniesScreen search={search} />;
       case 'revenue':   return <RevenueScreen search={search} />;
+      case 'invoices':  return <InvoicesScreen search={search} />;
       case 'reviews':   return <ReviewsScreen search={search} />;
       case 'settings':  return <SettingsScreen />;
       default: return null;
