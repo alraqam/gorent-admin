@@ -948,7 +948,7 @@ const AT = {
   navProducts: "Mahsulotlar",
   navBookings: "Bandlovlar",
   navHosts: "Mezbonlar",
-  navCustomers: "Mijozlar",
+  navBuildings: "Binolar",
   navRevenue: "Daromad",
   navReviews: "Sharhlar",
   navSettings: "Sozlamalar",
@@ -1008,6 +1008,35 @@ const PAYOUT_STATUS = {
   pending: { label: "Kutilmoqda",  hue: 70,  tone: "warn" },
   hold:    { label: "Ushlab turilgan", hue: 25, tone: "bad" },
 };
+// Money-loop dictionaries: contracts, payments, charges, payout statements.
+const CONTRACT_STATUS = {
+  active:     { label: "Faol",            hue: 155, tone: "good" },
+  expiring:   { label: "30 kun ichida",   hue: 70,  tone: "warn" },
+  expired:    { label: "Muddati tugagan", hue: 25,  tone: "bad" },
+  draft:      { label: "Qoralama",        hue: 250, tone: "muted" },
+  terminated: { label: "Bekor qilingan",  hue: 25,  tone: "bad" },
+  renewed:    { label: "Uzaytirilgan",    hue: 200, tone: "info" },
+};
+const PAYMENT_METHODS = {
+  bank:  { label: "Bank o'tkazma", hue: 200 },
+  cash:  { label: "Naqd",          hue: 155 },
+  payme: { label: "Payme",         hue: 190 },
+  click: { label: "Click",         hue: 220 },
+  uzum:  { label: "Uzum",          hue: 290 },
+  other: { label: "Boshqa",        hue: 250 },
+};
+const CHARGE_TYPES = {
+  utility: { label: "Kommunal",     hue: 200 },
+  service: { label: "Xizmat",       hue: 155 },
+  penalty: { label: "Jarima",       hue: 25 },
+  deposit: { label: "Kafolat puli", hue: 70 },
+  other:   { label: "Boshqa",       hue: 250 },
+};
+const STATEMENT_STATUS = {
+  draft:    { label: "Qoralama",     hue: 250, tone: "muted" },
+  approved: { label: "Tasdiqlangan", hue: 70,  tone: "warn" },
+  paid:     { label: "To'langan",    hue: 155, tone: "good" },
+};
 
 // ─── Category meta (admin coloring) ─────────────────────────
 const CAT_META = {
@@ -1019,157 +1048,65 @@ const CAT_META = {
 function catName(id) { return (window.CATEGORIES.find((c) => c.id === id) || {}).name || id; }
 function catShort(id) { return (window.CATEGORIES.find((c) => c.id === id) || {}).short || id; }
 
-// ─── Deterministic pseudo-random (stable across reloads) ────
-function seeded(n) { let x = Math.sin(n * 9973) * 10000; return x - Math.floor(x); }
+// ─── Unit types & periods (fallback if /meta is unavailable) ─
+const UNIT_TYPES = {
+  virtual_office:  { label: "Virtual ofis (yuridik manzil)", short: "Virtual",      defaultPeriod: 'month', hue: 290 },
+  room:            { label: "Xona (shaxsiy ofis)",           short: "Xona",         defaultPeriod: 'month', hue: 24 },
+  meeting_room:    { label: "Yig'ilish xonasi",              short: "Yig'ilish",    defaultPeriod: 'hour',  hue: 200 },
+  conference_room: { label: "Konferensiya zali",             short: "Konferensiya", defaultPeriod: 'hour',  hue: 250 },
+  desk:            { label: "Ish stoli (koworking)",         short: "Stol",         defaultPeriod: 'month', hue: 158 },
+};
+const PERIOD_LABELS = { month: 'oy', day: 'kun', hour: 'soat' };
+function unitTypeMeta(type) {
+  return ((window.META && window.META.unitTypes) || UNIT_TYPES)[type] || { label: type, short: type, defaultPeriod: 'month', hue: 250 };
+}
+function periodLabel(period) {
+  return ((window.META && window.META.periods) || PERIOD_LABELS)[period] || period;
+}
 
-// ─── PRODUCTS — extend LISTINGS with admin fields ───────────
-const HOST_IDS = {}; // title host name -> hostId map filled below
-const PRODUCTS = window.LISTINGS.map((l, i) => {
-  const r = seeded(i + 1);
-  const statusPool = ['active', 'active', 'active', 'pending', 'paused', 'active', 'draft'];
-  const status = i === 2 ? 'pending' : i === 5 ? 'paused' : i === 10 ? 'pending' : i === 8 ? 'draft' : 'active';
-  const bookings = Math.round(6 + r * 40);
-  const occ = Math.round(45 + seeded(i + 7) * 50);
-  const monthsLive = Math.round(2 + seeded(i + 3) * 22);
-  const revenue = Math.round(l.price * (0.6 + seeded(i + 11) * 1.8) * (status === 'active' ? 1 : 0.4));
-  const views = Math.round(200 + seeded(i + 5) * 5400);
-  const created = new Date(2025, (i * 2) % 12, 3 + (i % 20));
-  return {
-    ...l, status, bookings, occ, revenue, views, monthsLive,
-    createdLabel: `${String(created.getDate()).padStart(2,'0')}.${String(created.getMonth()+1).padStart(2,'0')}.${created.getFullYear()}`,
-    created,
-  };
-});
+// ─── Date/time & avatar-hue helpers ─────────────────────────
+// Booking dates come from the API as ISO DateTime strings.
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
+function fmtTimeHM(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+// Deterministic avatar hue from a name (the API no longer sends a hue per customer).
+function nameHue(name) { return (String(name || '?').charCodeAt(0) * 137) % 360; }
+// "01.07.2026 – 01.08.2026" / hourly: "04.07.2026 · 10:00–12:00"
+function fmtBookingRange(b) {
+  const period = b.unit?.offering?.product?.period;
+  if (period === 'hour') return `${fmtDate(b.start)} · ${fmtTimeHM(b.start)}–${fmtTimeHM(b.end)}`;
+  return `${fmtDate(b.start)} – ${fmtDate(b.end)}`;
+}
 
-// ─── HOSTS — aggregate from products ────────────────────────
-const HOST_SEED = [
-  { name: "Aziza Rashidova",  org: "AR Estate",        city: "Toshkent",  hue: 38,  joined: "2022", payout: "Bank · UZCARD", verified: true,  super: true },
-  { name: "Sanjar Muradov",   org: "Sun Tower MCHJ",   city: "Toshkent",  hue: 165, joined: "2024", payout: "Humo", verified: true,  super: false },
-  { name: "Diyora To'rayeva", org: "Olmazor Spaces",   city: "Toshkent",  hue: 220, joined: "2023", payout: "Bank o'tkazma", verified: true,  super: false },
-  { name: "Asaxiy Business",  org: "Asaxiy B2B",       city: "Toshkent",  hue: 280, joined: "2021", payout: "Bank · UZCARD", verified: true,  super: true },
-  { name: "Otabek Saidov",    org: "Loft Group",       city: "Toshkent",  hue: 12,  joined: "2024", payout: "UZCARD", verified: false, super: false },
-  { name: "Rustam Aliyev",    org: "IT Park Residency",city: "Toshkent",  hue: 158, joined: "2020", payout: "Bank o'tkazma", verified: true,  super: true },
-  { name: "Plaza Group",      org: "Plaza Holding",    city: "Toshkent",  hue: 295, joined: "2019", payout: "Bank · korporativ", verified: true, super: true },
-  { name: "Nodir Pulatov",    org: "Tashkent City Mgmt", city: "Toshkent", hue: 24, joined: "2023", payout: "UZCARD", verified: true, super: true },
-];
-// Map a couple product hosts to seed hosts by index for variety
-const HOSTS = HOST_SEED.map((h, i) => {
-  const owned = PRODUCTS.filter((p, pi) => pi % HOST_SEED.length === i);
-  const revenue = owned.reduce((s, p) => s + p.revenue, 0);
-  const bookings = owned.reduce((s, p) => s + p.bookings, 0);
-  const ratingAvg = owned.length ? (owned.reduce((s, p) => s + p.rating, 0) / owned.length) : 4.8;
-  return {
-    id: 'H' + String(i + 1).padStart(2, '0'),
-    ...h, listings: owned.length, revenue, bookings,
-    rating: Number(ratingAvg.toFixed(2)),
-    pending: owned.filter((p) => p.status === 'pending').length,
-  };
-});
-
-// ─── BOOKINGS ───────────────────────────────────────────────
-const CUSTOMER_NAMES = [
-  "Bekzod Yusupov", "Madina Karimova", "Jasur Toshpo'latov", "Nigora Saidova",
-  "Akmal Rahimov", "Kamola Ergasheva", "Shoxruh Nazarov", "Dilnoza Abdullayeva",
-  "Farrux Komilov", "Sevara Yo'ldosheva", "Ulug'bek Sodiqov", "Gulnoza Mirzayeva",
-  "Temur Abdurahmonov", "Laylo Hamidova", "Sardor Qodirov", "Malika Ismoilova",
-];
-const COMPANIES = [
-  "Epam Systems", "Uzum Market", "TBC Bank UZ", "Click Evolution", "Payme",
-  "Artel Electronics", "IMAN Invest", "Workly", "Billz", "MyTaxi UZ",
-  "Korzinka", "Beeline Uz", "Anorbank", "Davr Mobile", "Express24",
-];
-const BOOKINGS = Array.from({ length: 22 }, (_, i) => {
-  const r = seeded(i + 31);
-  const p = PRODUCTS[Math.floor(seeded(i + 41) * PRODUCTS.length)];
-  const statusPool = ['active', 'confirmed', 'confirmed', 'pending', 'completed', 'active', 'cancelled', 'completed'];
-  const status = statusPool[Math.floor(r * statusPool.length)];
-  const months = 1 + Math.floor(seeded(i + 51) * 11);
-  const total = p.price * months;
-  const day = 1 + Math.floor(seeded(i + 61) * 27);
-  const mon = Math.floor(seeded(i + 71) * 6);
-  const customer = CUSTOMER_NAMES[i % CUSTOMER_NAMES.length];
-  const company = COMPANIES[i % COMPANIES.length];
-  return {
-    id: 'GR-' + String(48210 + i * 7),
-    product: p, customer, company,
-    cust_hue: (i * 47) % 360,
-    status, months, total,
-    start: `${String(day).padStart(2,'0')}.0${mon + 1}.2026`,
-    nights: months,
-  };
-});
-
-// ─── REVIEWS (moderation queue) ─────────────────────────────
-const REVIEW_TEXTS = [
-  "Joy juda qulay, hammasi tavsifga mos. Tavsiya qilaman.",
-  "Wi-Fi tez, yig'ilish xonasi toza. Mezbon javobgar.",
-  "Narxi biroz baland, lekin joylashuv ajoyib.",
-  "Konditsioner ishlamadi, lekin tezda tuzatishdi.",
-  "Reseption xizmati zo'r, mehmonlar uchun qulay.",
-  "Avtoturargoh kichik, ertalab joy topish qiyin.",
-  "Hujjatlar tez rasmiylashtirildi, virtual manzil ishladi.",
-  "Stol va kreslolar yangi, ish uchun ideal muhit.",
-];
-const REVIEWS = Array.from({ length: 14 }, (_, i) => {
-  const r = seeded(i + 83);
-  const p = PRODUCTS[Math.floor(seeded(i + 91) * PRODUCTS.length)];
-  const flagged = i === 1 || i === 6 || i === 9;
-  const stateP = ['published', 'published', 'pending', 'published', 'flagged'];
-  const state = flagged ? 'flagged' : (i % 4 === 2 ? 'pending' : 'published');
-  return {
-    id: 'RV' + String(1200 + i),
-    product: p, author: CUSTOMER_NAMES[(i + 3) % CUSTOMER_NAMES.length],
-    hue: (i * 53) % 360,
-    rating: state === 'flagged' ? 1 + Math.floor(r * 2) : 4 + Math.floor(r * 2),
-    text: REVIEW_TEXTS[i % REVIEW_TEXTS.length],
-    date: `${String(2 + (i % 26)).padStart(2,'0')}.0${(i % 5) + 1}.2026`,
-    state,
-  };
-});
-
-// ─── PAYOUTS ────────────────────────────────────────────────
-const PAYOUTS = HOSTS.map((h, i) => {
-  const statusPool = ['paid', 'paid', 'pending', 'paid', 'hold', 'pending', 'paid', 'paid'];
-  const amount = Math.round(h.revenue * (0.12 + seeded(i + 99) * 0.05)); // platform-side payout slice
-  return {
-    id: 'PO-' + String(9100 + i * 3),
-    host: h, amount, fee: Math.round(amount * 0.12),
-    status: statusPool[i % statusPool.length],
-    date: `0${(i % 6) + 1}.06.2026`,
-  };
-});
-
-// ─── KPI SERIES (12 months) ─────────────────────────────────
+// ─── Initial datasets — replaced by api.bootstrap() before render ──
 const MONTHS_UZ = ["Yan","Fev","Mar","Apr","May","Iyn","Iyl","Avg","Sen","Okt","Noy","Dek"];
-const revenueSeries = MONTHS_UZ.map((m, i) => {
-  const base = 180 + i * 22 + Math.sin(i / 1.6) * 30 + seeded(i + 5) * 24;
-  return { label: m, value: Math.round(base) }; // in mln so'm
-});
-const bookingsSeries = MONTHS_UZ.map((m, i) => ({ label: m, value: Math.round(40 + i * 6 + seeded(i + 13) * 26) }));
-
-// Category breakdowns
-const byCategory = window.CATEGORIES.map((c) => {
-  const items = PRODUCTS.filter((p) => p.cat === c.id);
-  const rev = items.reduce((s, p) => s + p.revenue, 0);
-  const bk = items.reduce((s, p) => s + p.bookings, 0);
-  const occ = items.length ? Math.round(items.reduce((s, p) => s + p.occ, 0) / items.length) : 0;
-  return { id: c.id, name: c.name, short: c.short, count: items.length, revenue: rev, bookings: bk, occ };
-});
-
-// ─── KPI headline figures ───────────────────────────────────
-const totalRevenue = PRODUCTS.reduce((s, p) => s + p.revenue, 0);
-const totalBookings = BOOKINGS.length;
-const activeBookings = BOOKINGS.filter((b) => b.status === 'active' || b.status === 'confirmed').length;
-const avgOccupancy = Math.round(PRODUCTS.reduce((s, p) => s + p.occ, 0) / PRODUCTS.length);
-const pendingApproval = PRODUCTS.filter((p) => p.status === 'pending').length + REVIEWS.filter((r) => r.state === 'pending' || r.state === 'flagged').length;
-const avgRating = Number((PRODUCTS.reduce((s, p) => s + p.rating, 0) / PRODUCTS.length).toFixed(2));
-
-const KPIS = [
-  { id: 'rev',  label: "Jami daromad",   value: fmtCompactSom(totalRevenue), unit: "so'm", delta: +12.4, spark: revenueSeries.map((d) => d.value) },
-  { id: 'book', label: "Faol bandlovlar", value: String(activeBookings), unit: "ta", spark: bookingsSeries.map((d) => d.value) },
-  { id: 'occ',  label: "Bandlik darajasi", value: avgOccupancy + "%", unit: "", delta: +3.6, spark: [62,64,61,66,69,71,70,73,72,74,76,avgOccupancy] },
-  { id: 'pend', label: "Tasdiqlash navbati", value: String(pendingApproval), unit: "ta", delta: -2, deltaInvert: true, spark: [9,7,8,6,7,5,6,5,4,5,4,pendingApproval] },
-];
+const BUILDINGS = [];
+const PRODUCTS = [];
+const UNITS = [];
+const HOSTS = [];
+const BOOKINGS = [];
+const REVIEWS = [];
+const PAYOUTS = [];
+const NOTIFS = [];
+const revenueSeries = MONTHS_UZ.map((m) => ({ label: m, value: 0 }));
+const bookingsSeries = MONTHS_UZ.map((m) => ({ label: m, value: 0 }));
+const byCategory = window.CATEGORIES.map((c) => ({ id: c.id, name: c.name, short: c.short, count: 0, revenue: 0, bookings: 0, occ: 0 }));
+const totalRevenue = 0;
+const totalBookings = 0;
+const activeBookings = 0;
+const avgOccupancy = 0;
+const pendingApproval = 0;
+const avgRating = 0;
+const KPIS = [];
 
 // ─── Formatters ─────────────────────────────────────────────
 function fmtCompactSom(n) {
@@ -1180,24 +1117,17 @@ function fmtCompactSom(n) {
 }
 function fmtSomFull(n) { return window.fmtSom(n) + " so'm"; }
 
-// ─── NOTIFICATIONS (activity feed) ──────────────────────────
-const NOTIFS = [
-  { id: 'n1', type: 'approval', icon: 'box',   title: "Yangi e'lon tasdiqlash kutmoqda", body: PRODUCTS.find((p) => p.status === 'pending')?.title || "Yangi ofis", time: "5 daqiqa oldin", section: 'products', unread: true, hue: 70 },
-  { id: 'n2', type: 'booking',  icon: 'cal',   title: "Yangi bandlov", body: BOOKINGS[0].customer + " · " + BOOKINGS[0].product.title, time: "23 daqiqa oldin", section: 'bookings', unread: true, hue: 200 },
-  { id: 'n3', type: 'review',   icon: 'flag',  title: "Sharh belgilandi", body: "Moderatsiya talab qilinadi", time: "1 soat oldin", section: 'reviews', unread: true, hue: 25 },
-  { id: 'n4', type: 'payout',   icon: 'wallet',title: "To'lov amalga oshirildi", body: PAYOUTS[0].host.name + " · " + fmtCompactSom(PAYOUTS[0].amount) + " so'm", time: "3 soat oldin", section: 'revenue', unread: false, hue: 155 },
-  { id: 'n5', type: 'host',     icon: 'user',  title: "Yangi mezbon ro'yxatdan o'tdi", body: "Otabek Saidov · Loft Group", time: "Bugun, 09:14", section: 'hosts', unread: false, hue: 290 },
-  { id: 'n6', type: 'booking',  icon: 'cal',   title: "Bandlov bekor qilindi", body: BOOKINGS.find((b) => b.status === 'cancelled')?.customer || "Mijoz", time: "Kecha, 18:40", section: 'bookings', unread: false, hue: 25 },
-];
-
 Object.assign(window, { NOTIFS });
 
 Object.assign(window, {
   AT, PRODUCT_STATUS, BOOKING_STATUS, PAYOUT_STATUS, CAT_META,
-  catName, catShort, PRODUCTS, HOSTS, BOOKINGS, REVIEWS, PAYOUTS,
+  CONTRACT_STATUS, PAYMENT_METHODS, CHARGE_TYPES, STATEMENT_STATUS,
+  catName, catShort, BUILDINGS, PRODUCTS, UNITS, HOSTS, BOOKINGS, REVIEWS, PAYOUTS,
   MONTHS_UZ, revenueSeries, bookingsSeries, byCategory,
   KPIS, totalRevenue, totalBookings, activeBookings, avgOccupancy, pendingApproval, avgRating,
   fmtCompactSom, fmtSomFull,
+  UNIT_TYPES, PERIOD_LABELS, unitTypeMeta, periodLabel,
+  fmtDate, fmtTimeHM, nameHue, fmtBookingRange,
 });
 
 // ============================================================
@@ -1238,6 +1168,7 @@ const IconRefresh = (p) => <AIco {...p} d="M4 12a8 8 0 0 1 13.7-5.7L20 8 M20 3.5
 const IconLink    = (p) => <AIco {...p} d="M9.5 14.5l5-5 M9 7l1.2-1.2a3.5 3.5 0 0 1 5 5L15 12 M15 17l-1.2 1.2a3.5 3.5 0 0 1-5-5L10 12" />;
 const IconDoc     = (p) => <AIco {...p} d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M14 3v5h5 M9 13h6M9 17h4" />;
 const IconShieldCheck = (p) => <AIco {...p} d="M12 3l8 3v6c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V6l8-3z M8.5 12l2.5 2.5L16 9.5" />;
+const IconWarn    = (p) => <AIco {...p} d="M12 3.5L2.5 20h19L12 3.5z M12 10v4.5 M12 17.5h.01" />;
 
 // ─── Status pill ────────────────────────────────────────────
 function StatusPill({ s, dict = window.PRODUCT_STATUS, size = "md" }) {
@@ -1530,7 +1461,7 @@ const ADMIN_UI_CSS = `
 Object.assign(window, {
   AIco, IconGauge, IconBox, IconWallet, IconChart, IconSettings, IconLogout, IconDots,
   IconEdit, IconTrash, IconEye, IconTrendUp, IconTrendDn, IconDownload, IconClock, IconCard,
-  IconExternal, IconFlag, IconCheck2, IconX2, IconPhone, IconArrowUp, IconRefresh, IconLink, IconDoc, IconShieldCheck,
+  IconExternal, IconFlag, IconCheck2, IconX2, IconPhone, IconArrowUp, IconRefresh, IconLink, IconDoc, IconShieldCheck, IconWarn,
   StatusPill, CatTag, CategoryGlyph, Delta, Sparkline, BarChart, Donut, ProgressBar, Card, StatCard,
   Btn, IconBtn, Segmented, SectionHead, Drawer, SearchInput, ADMIN_UI_CSS,
 });
@@ -1544,10 +1475,12 @@ Object.assign(window, {
 // ─── Sidebar ────────────────────────────────────────────────
 const NAV = [
   { id: 'overview',  label: () => window.AT.navOverview,  icon: IconGauge },
+  { id: 'buildings', label: () => window.AT.navBuildings, icon: IconBuilding },
   { id: 'products',  label: () => window.AT.navProducts,  icon: IconBox },
   { id: 'bookings',  label: () => window.AT.navBookings,  icon: IconCal },
+  { id: 'contracts', label: () => "Shartnomalar",          icon: IconDoc },
+  { id: 'debtors',   label: () => "Qarzdorlik",            icon: IconWarn },
   { id: 'hosts',     label: () => window.AT.navHosts,     icon: IconUsers },
-  { id: 'customers', label: () => window.AT.navCustomers, icon: IconUser },
   { id: 'companies', label: () => "Kompaniyalar",         icon: IconBuilding },
   { id: 'revenue',   label: () => window.AT.navRevenue,   icon: IconWallet },
   { id: 'invoices',  label: () => "Hisob-fakturalar",     icon: IconDoc },
@@ -1555,7 +1488,7 @@ const NAV = [
 ];
 
 function Sidebar({ route, setRoute, role, counts }) {
-  const badge = { products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews };
+  const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
   return (
     <div style={{
       width: 244, flexShrink: 0, background: 'var(--g-brand-deep)', color: '#fff',
@@ -1750,14 +1683,15 @@ function DataTable({ columns, rows, onRow, rowKey = (r, i) => i, empty }) {
 
 // ─── Cell helpers ───────────────────────────────────────────
 function ProductCell({ p }) {
+  const hue = (window.CAT_META[p.cat] || {}).hue ?? 30;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
       <div style={{ width: 44, height: 44, borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}>
-        <PhotoPlaceholder hue={p.hue} label="" radius={10} />
+        <PhotoPlaceholder hue={hue} label="" radius={10} />
       </div>
       <div style={{ minWidth: 0 }}>
-        <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>{p.title}</div>
-        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{p.id} · {p.district}, {p.city}</div>
+        <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>{p.name}</div>
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{p.id} · {window.unitTypeMeta(p.type).short}</div>
       </div>
     </div>
   );
@@ -1873,10 +1807,10 @@ function RecentBookingsPanel({ onSeeAll, rows = 6 }) {
       {list.map((b, i) => (
         <div key={b.id} className="adm-row" style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px',
           borderTop: '1px solid var(--g-line)', transition: 'background .12s' }}>
-          <Avatar name={b.customer} size={34} hue={b.cust_hue} />
+          <Avatar name={b.customer} size={34} hue={nameHue(b.customer)} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.customer} <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}>· {b.company}</span></div>
-            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.product.title}</div>
+            <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.customer}{b.companyRef?.name && <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}> · {b.companyRef.name}</span>}</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.unit?.name} · {b.unit?.offering?.building?.name}</div>
           </div>
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
             <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(b.total)} so'm</div>
@@ -1888,23 +1822,29 @@ function RecentBookingsPanel({ onSeeAll, rows = 6 }) {
   );
 }
 
+// Pending offerings live under each building (buildings responses include offerings).
+function pendingOfferings() {
+  return (window.BUILDINGS || []).flatMap((b) =>
+    (b.offerings || []).filter((o) => o.status === 'pending').map((o) => ({ ...o, building: o.building || b })));
+}
+
 function ApprovalQueuePanel({ onGoProducts, onGoReviews }) {
-  const pendP = window.PRODUCTS.filter((p) => p.status === 'pending');
+  const pendO = pendingOfferings();
   const flagged = window.REVIEWS.filter((r) => r.state === 'flagged' || r.state === 'pending');
   return (
     <Card>
-      <SectionHead title="Tasdiqlash navbati" sub={`${pendP.length + flagged.length} ta amal kutilmoqda`} />
+      <SectionHead title="Tasdiqlash navbati" sub={`${pendO.length + flagged.length} ta amal kutilmoqda`} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {pendP.slice(0, 3).map((p) => (
-          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 10, borderRadius: 12, background: 'var(--g-bg)' }}>
-            <div style={{ width: 38, height: 38, borderRadius: 9, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={p.hue} label="" radius={9} /></div>
+        {pendO.slice(0, 3).map((o) => (
+          <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 10, borderRadius: 12, background: 'var(--g-bg)' }}>
+            <div style={{ width: 38, height: 38, borderRadius: 9, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={o.building?.hue ?? 30} label="" radius={9} /></div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title}</div>
-              <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yangi e'lon · {p.host}</div>
+              <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.product?.name || '—'}</div>
+              <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yangi taklif · {o.building?.name || '—'}</div>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <IconBtn title="Tasdiqlash" onClick={() => gorentMutate(() => api.post(`/products/${p.id}/approve`))} style={{ background: 'oklch(0.95 0.05 155)', color: 'oklch(0.5 0.14 155)', width: 30, height: 30 }}><IconCheck2 size={15} /></IconBtn>
-              <IconBtn title="Rad etish" onClick={() => gorentMutate(() => api.post(`/products/${p.id}/reject`))} style={{ background: 'oklch(0.96 0.04 25)', color: 'oklch(0.55 0.15 25)', width: 30, height: 30 }}><IconX2 size={15} /></IconBtn>
+              <IconBtn title="Tasdiqlash" onClick={() => gorentMutate(() => api.post(`/offerings/${o.id}/approve`))} style={{ background: 'oklch(0.95 0.05 155)', color: 'oklch(0.5 0.14 155)', width: 30, height: 30 }}><IconCheck2 size={15} /></IconBtn>
+              <IconBtn title="Rad etish" onClick={() => gorentMutate(() => api.post(`/offerings/${o.id}/reject`))} style={{ background: 'oklch(0.96 0.04 25)', color: 'oklch(0.55 0.15 25)', width: 30, height: 30 }}><IconX2 size={15} /></IconBtn>
             </div>
           </div>
         ))}
@@ -1923,22 +1863,24 @@ function ApprovalQueuePanel({ onGoProducts, onGoReviews }) {
   );
 }
 
+// Catalog products don't carry revenue — rank by how many buildings offer them.
 function TopProductsPanel() {
-  const top = [...window.PRODUCTS].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
-  const max = top[0].revenue;
+  const withOfferings = window.PRODUCTS.map((p) => ({ ...p, offeringCount: (p.offerings || []).length }));
+  const top = withOfferings.sort((a, b) => b.offeringCount - a.offeringCount).slice(0, 5);
+  const max = Math.max(1, ...top.map((p) => p.offeringCount));
   return (
     <Card>
-      <SectionHead title="Eng daromadli mahsulotlar" sub="Joriy oy" />
+      <SectionHead title="Eng ko'p taklif qilingan mahsulotlar" sub="Binolar soni bo'yicha" />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {top.map((p, i) => (
           <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ font: `700 12px ui-monospace, monospace`, color: 'var(--g-ink-4)', width: 16 }}>{i + 1}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 5 }}>
-                <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{p.title}</span>
-                <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', flexShrink: 0 }}>{window.fmtCompactSom(p.revenue)}</span>
+                <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{p.name}</span>
+                <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', flexShrink: 0 }}>{p.offeringCount} ta bino</span>
               </div>
-              <ProgressBar value={(p.revenue / max) * 100} color={CAT_COLORS[p.cat]} h={6} />
+              <ProgressBar value={(p.offeringCount / max) * 100} color={CAT_COLORS[p.cat]} h={6} />
             </div>
           </div>
         ))}
@@ -2266,9 +2208,10 @@ Object.assign(window, { VirtualOfficeIntegration, VirtualIntegrationForm, CONNEC
 // src/admin-products.jsx
 // ============================================================
 
-// admin-products.jsx — Gorent Admin: Products list + detail + add/edit form.
+// admin-products.jsx — Gorent Admin: global product catalog + add/edit form.
+// A Product is a catalog entry (unique name); buildings support it via Offerings.
 
-function CategoryFilterBar({ cat, setCat, status, setStatus, view, setView }) {
+function CategoryFilterBar({ cat, setCat }) {
   const cats = [{ id: 'all', name: window.AT.all }, ...window.CATEGORIES.map((c) => ({ id: c.id, name: c.name }))];
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -2290,155 +2233,167 @@ function CategoryFilterBar({ cat, setCat, status, setStatus, view, setView }) {
           );
         })}
       </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} className="adm-select">
-          <option value="all">{window.AT.status}: {window.AT.all}</option>
-          {Object.entries(window.PRODUCT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
-        <Segmented value={view} onChange={setView} options={[
-          { value: 'table', label: '', icon: <IconList size={15} /> },
-          { value: 'grid', label: '', icon: <IconGrid size={15} /> },
-        ]} />
-      </div>
     </div>
   );
 }
 
-// ─── Product grid card ──────────────────────────────────────
-function ProductGridCard({ p, onClick }) {
-  return (
-    <Card pad={0} style={{ overflow: 'hidden', cursor: 'pointer' }} onClick={onClick} className="adm-prodcard">
-      <div style={{ position: 'relative', aspectRatio: '16/10' }}>
-        <PhotoPlaceholder hue={p.hue} label={`${p.city.toLowerCase()} · ${p.district.toLowerCase()}`} radius={0} />
-        <div style={{ position: 'absolute', top: 10, left: 10 }}><CatTag cat={p.cat} /></div>
-        <div style={{ position: 'absolute', top: 10, right: 10 }}><StatusPill s={p.status} /></div>
-      </div>
-      <div style={{ padding: 15 }}>
-        <div style={{ font: `600 14px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title}</div>
-        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{p.id} · {p.host}</div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 13 }}>
-          <div>
-            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(p.price)} <span style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>so'm/oy</span></div>
-            <div style={{ display: 'flex', gap: 12, marginTop: 7 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}><IconStar size={12} /> {p.rating.toFixed(2)}</span>
-              <span style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{p.bookings} band</span>
-              <span style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{p.occ}% band.</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-// ─── Products screen ────────────────────────────────────────
+// ─── Products screen — global catalog ───────────────────────
+// Every product is platform-wide; "Binolar" shows how many buildings offer it.
 function ProductsScreen({ search, openForm, role }) {
   const [cat, setCat] = React.useState('all');
-  const [status, setStatus] = React.useState('all');
-  const [view, setView] = React.useState('table');
   const [detail, setDetail] = React.useState(null);
+  const isPlatform = role === 'platform';
 
-  let rows = window.PRODUCTS.filter((p) => (cat === 'all' || p.cat === cat) && (status === 'all' || p.status === status));
-  if (role === 'host') rows = rows.filter((_, i) => i % window.HOSTS.length === 0); // host sees own subset
-  if (search) rows = rows.filter((p) => (p.title + p.district + p.city + p.host + p.id).toLowerCase().includes(search.toLowerCase()));
+  let rows = window.PRODUCTS.filter((p) => cat === 'all' || p.cat === cat);
+  if (search) rows = rows.filter((p) => (p.name + ' ' + (p.desc || '') + ' ' + p.id).toLowerCase().includes(search.toLowerCase()));
 
   const columns = [
-    { key: 'product', label: 'Mahsulot', render: (p) => <ProductCell p={p} /> },
+    { key: 'id', label: 'ID', render: (p) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{p.id}</span> },
+    { key: 'name', label: 'Nomi', render: (p) => <ProductCell p={p} /> },
     { key: 'cat', label: window.AT.category, render: (p) => <CatTag cat={p.cat} /> },
-    { key: 'price', label: window.AT.price, render: (p) => <MoneyCell n={p.price} sub="oyiga" /> },
-    { key: 'bookings', label: window.AT.bookings, align: 'center', render: (p) => <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{p.bookings}</span> },
-    { key: 'occ', label: window.AT.occupancy, w: 120, render: (p) => (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ width: 54 }}><ProgressBar value={p.occ} color={window.CAT_COLORS[p.cat]} h={5} /></div>
-        <span style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{p.occ}%</span>
-      </div>
-    ) },
-    { key: 'rating', label: window.AT.rating, align: 'center', render: (p) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}><IconStar size={12} /> {p.rating.toFixed(2)}</span> },
-    { key: 'status', label: window.AT.status, render: (p) => <StatusPill s={p.status} /> },
-    { key: 'act', label: '', align: 'right', render: (p) => (
+    { key: 'type', label: 'Birlik turi', render: (p) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{window.unitTypeMeta(p.type).label}</span> },
+    { key: 'period', label: 'Davr', align: 'center', render: (p) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{window.periodLabel(p.period)}</span> },
+    { key: 'offerings', label: 'Binolar', align: 'center', render: (p) => <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{(p.offerings || []).length}</span> },
+    { key: 'desc', label: 'Tavsif', render: (p) => <span style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', display: 'inline-block', maxWidth: 240, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', verticalAlign: 'bottom' }}>{p.desc || '—'}</span> },
+    ...(isPlatform ? [{ key: 'act', label: '', align: 'right', render: (p) => (
       <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}>
         <IconBtn title={window.AT.view} onClick={() => setDetail(p)}><IconEye size={16} /></IconBtn>
         <IconBtn title={window.AT.edit} onClick={() => openForm(p)}><IconEdit size={16} /></IconBtn>
-        <IconBtn title={window.AT.delete} style={{ color: 'oklch(0.55 0.16 25)' }} onClick={() => window.confirm(`"${p.title}" mahsulotini o'chirasizmi?`) && gorentMutate(() => api.del(`/products/${p.id}`))}><IconTrash size={16} /></IconBtn>
+        <IconBtn title={window.AT.delete} style={{ color: 'oklch(0.55 0.16 25)' }} onClick={() => window.confirm(`"${p.name}" mahsulotini katalogdan o'chirasizmi?`) && gorentMutate(() => api.del(`/products/${p.id}`))}><IconTrash size={16} /></IconBtn>
       </div>
-    ) },
+    ) }] : []),
   ];
 
   return (
     <div>
-      <CategoryFilterBar cat={cat} setCat={setCat} status={status} setStatus={setStatus} view={view} setView={setView} />
+      <CategoryFilterBar cat={cat} setCat={setCat} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-        <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{rows.length} ta mahsulot</div>
+        <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{rows.length} ta mahsulot · katalog{isPlatform ? '' : " · faqat o'qish uchun"}</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <Btn kind="ghost" sm><IconDownload size={15} /> {window.AT.export}</Btn>
-          <Btn kind="primary" sm onClick={() => openForm(null)}><IconPlus size={15} /> {window.AT.addProduct}</Btn>
+          {isPlatform && <Btn kind="primary" sm onClick={() => openForm(null)}><IconPlus size={15} /> {window.AT.addProduct}</Btn>}
         </div>
       </div>
 
-      {view === 'table'
-        ? <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(p) => setDetail(p)} />
-        : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
-            {rows.map((p) => <ProductGridCard key={p.id} p={p} onClick={() => setDetail(p)} />)}
-          </div>}
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(p) => setDetail(p)} empty="Katalogda mahsulot yo'q" />
 
-      <ProductDetailDrawer p={detail} onClose={() => setDetail(null)} onEdit={(p) => { setDetail(null); openForm(p); }} />
+      <ProductDetailDrawer p={detail} role={role} onClose={() => setDetail(null)} onEdit={(p) => { setDetail(null); openForm(p); }} />
     </div>
   );
 }
 
-// ─── Detail drawer ──────────────────────────────────────────
-function ProductDetailDrawer({ p, onClose, onEdit }) {
+// ─── Unit add/edit inline form (per offering) ───────────────
+// Type/period come from the offering's catalog product; a unit only overrides
+// price — an empty price means "bino narxi" (inherits offering.price).
+function UnitEditor({ unit, offering, onDone }) {
+  const isEdit = !!unit;
+  const [f, setF] = React.useState(() => unit ? {
+    name: unit.name, qty: unit.qty ?? 1, capacity: unit.capacity ?? '', m2: unit.m2 ?? '',
+    price: unit.price ?? '', status: unit.status || 'active',
+  } : { name: '', qty: 1, capacity: '', m2: '', price: '', status: 'active' });
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+
+  const submit = async () => {
+    if (!String(f.name).trim()) return;
+    setBusy(true);
+    const payload = {
+      name: String(f.name).trim(),
+      qty: Number(f.qty) || 1,
+      capacity: f.capacity === '' || f.capacity == null ? undefined : Number(f.capacity),
+      m2: f.m2 === '' || f.m2 == null ? undefined : Number(f.m2),
+      price: f.price === '' || f.price == null ? null : Number(f.price),
+      status: f.status,
+    };
+    const ok = await gorentMutate(() => isEdit
+      ? api.patch(`/units/${unit.id}`, payload)
+      : api.post('/units', { ...payload, offeringId: offering.id }));
+    setBusy(false);
+    if (ok) onDone();
+  };
+
+  return (
+    <div style={{ padding: 14, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)' }}>
+      <div style={{ font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>{isEdit ? "Birlikni tahrirlash" : "Yangi birlik"} <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}>· {offering?.product?.name || ''}</span></div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div>
+          <Label>Nomi</Label>
+          <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="7A xona" />
+        </div>
+        <div>
+          <Label>Soni (zaxira)</Label>
+          <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 10 }}>
+        <div>
+          <Label>Sig'imi (odam)</Label>
+          <input className="adm-input" type="number" value={f.capacity} onChange={(e) => set('capacity', e.target.value)} placeholder="4" />
+        </div>
+        <div>
+          <Label>Maydoni (m²)</Label>
+          <input className="adm-input" type="number" value={f.m2} onChange={(e) => set('m2', e.target.value)} placeholder="24" />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+        <div>
+          <Label>Narx (so'm) — ixtiyoriy</Label>
+          <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)}
+            placeholder={offering?.price ? `Bino narxi: ${window.fmtSom(offering.price)}` : "Bino narxi"} />
+          <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 4 }}>
+            Bo'sh qoldirilsa bino narxi qo'llanadi{offering?.price ? ` (${window.fmtSom(offering.price)} so'm)` : ''}.
+          </div>
+        </div>
+        <div>
+          <Label>Holat</Label>
+          <select className="adm-select" style={{ width: '100%' }} value={f.status} onChange={(e) => set('status', e.target.value)}>
+            {Object.entries(window.PRODUCT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn kind="ghost" sm onClick={onDone}>{window.AT.cancel}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !String(f.name).trim()}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─── Detail drawer — catalog product + offerings by building ─
+function ProductDetailDrawer({ p: pProp, role, onClose, onEdit }) {
+  // Re-resolve from the live dataset so refreshes are visible.
+  const p = pProp ? (window.PRODUCTS.find((x) => x.id === pProp.id) || pProp) : null;
+  const offerings = (p && p.offerings) || [];
+  const isPlatform = role === 'platform';
+  const hue = p ? ((window.CAT_META[p.cat] || {}).hue ?? 30) : 30;
   return (
     <Drawer open={!!p} onClose={onClose} width={580}>
       {p && (
         <>
-          <div style={{ position: 'relative', height: 220, flexShrink: 0 }}>
-            <PhotoPlaceholder hue={p.hue} label={`${p.city.toLowerCase()} · ${p.district.toLowerCase()}`} radius={0} />
+          <div style={{ position: 'relative', height: 150, flexShrink: 0 }}>
+            <PhotoPlaceholder hue={hue} label={`katalog · ${p.cat}`} radius={0} />
             <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(0,0,0,0.25), transparent 40%)' }} />
             <button onClick={onClose} className="adm-iconbtn" style={{ position: 'absolute', top: 16, left: 16, width: 34, height: 34, borderRadius: 999, background: 'rgba(255,255,255,0.9)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
-            <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 8 }}><CatTag cat={p.cat} /><StatusPill s={p.status} /></div>
+            <div style={{ position: 'absolute', top: 16, right: 16, display: 'flex', gap: 8 }}><CatTag cat={p.cat} /></div>
           </div>
 
           <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 24 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14 }}>
-              <div>
-                <div style={{ font: `700 19px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.02em' }}>{p.title}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
-                  <IconPin size={14} /> {p.district}, {p.city} · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{p.id}</span>
-                </div>
+            <div>
+              <div style={{ font: `700 19px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.02em' }}>{p.name}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+                <IconBox size={14} /> Katalog mahsuloti · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{p.id}</span>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ font: `700 20px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtSom(p.price)}</div>
-                <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>so'm / oy</div>
-              </div>
-            </div>
-
-            {/* Mini stats */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginTop: 20 }}>
-              {[
-                { l: 'Bandlovlar', v: p.bookings },
-                { l: 'Bandlik', v: p.occ + '%' },
-                { l: 'Ko\u2019rishlar', v: window.fmtCompactSom(p.views) },
-                { l: 'Baho', v: p.rating.toFixed(2) },
-              ].map((s) => (
-                <div key={s.l} style={{ background: 'var(--g-bg)', borderRadius: 12, padding: '13px 14px' }}>
-                  <div style={{ font: `700 18px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.02em' }}>{s.v}</div>
-                  <div style={{ font: `500 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{s.l}</div>
-                </div>
-              ))}
             </div>
 
             {/* Specs */}
-            <div style={{ marginTop: 22 }}>
-              <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Xususiyatlar</div>
+            <div style={{ marginTop: 20 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 24px' }}>
                 {[
                   ['Toifa', window.catName(p.cat)],
-                  ['Maydoni', p.cat === 'virtual' ? '—' : `${p.m2} m²`],
-                  ['Sig\u2019imi', `${p.cap} ${window.T.people}`],
-                  ['Mezbon', p.host],
-                  ['Tasdiqlangan', p.verified ? 'Ha' : 'Yo\u2019q'],
-                  ['Qo\u2019shilgan', p.createdLabel],
+                  ['Birlik turi', window.unitTypeMeta(p.type).label],
+                  ['Davr', window.periodLabel(p.period)],
+                  ['Binolar', `${offerings.length} ta`],
                 ].map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--g-line)', paddingBottom: 8 }}>
                     <span style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{k}</span>
@@ -2448,14 +2403,33 @@ function ProductDetailDrawer({ p, onClose, onEdit }) {
               </div>
             </div>
 
-            {/* Amenities */}
+            {p.desc && (
+              <div style={{ marginTop: 18, font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-2)', lineHeight: 1.55 }}>{p.desc}</div>
+            )}
+
+            {/* Offerings — which buildings support this product */}
             <div style={{ marginTop: 22 }}>
-              <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Imkoniyatlar</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {window.AMENITIES.slice(0, 6).map((a) => (
-                  <span key={a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 999, background: 'var(--g-bg-2)', font: `500 12px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
-                    <IconCheck size={13} /> {a.name}
-                  </span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>Takliflar ({offerings.length} ta bino)</div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {offerings.length === 0 && (
+                  <div style={{ padding: '18px 14px', borderRadius: 12, background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'center' }}>
+                    Hozircha hech bir bino bu mahsulotni taklif qilmaydi — bino sahifasidan taklif qo'shing.
+                  </div>
+                )}
+                {offerings.map((o) => (
+                  <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 12, background: 'var(--g-bg)' }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 9, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={o.building?.hue ?? 30} label="" radius={9} /></div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.building?.name || '—'}</div>
+                      <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{o.building?.district || ''}{o.building?.city ? `, ${o.building.city}` : ''} · {(o.units || []).length} ta birlik</div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(o.price || 0)} so'm/{window.periodLabel(p.period)}</div>
+                      <div style={{ marginTop: 3 }}><StatusPill s={o.status} size="sm" /></div>
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -2464,26 +2438,56 @@ function ProductDetailDrawer({ p, onClose, onEdit }) {
             {p.cat === 'virtual' && <VirtualOfficeIntegration p={p} />}
           </div>
 
-          {/* Footer actions */}
-          <div style={{ display: 'flex', gap: 10, padding: '16px 24px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
-            {p.status === 'pending'
-              ? <><Btn kind="primary" style={{ flex: 1 }} onClick={async () => { await gorentMutate(() => api.post(`/products/${p.id}/approve`)); onClose(); }}><IconCheck2 size={16} /> {window.AT.approve}</Btn><Btn kind="danger" style={{ flex: 1 }} onClick={async () => { await gorentMutate(() => api.post(`/products/${p.id}/reject`)); onClose(); }}><IconX2 size={16} /> {window.AT.reject}</Btn></>
-              : <><Btn kind="danger" style={{}} onClick={async () => { if (window.confirm(`"${p.title}" mahsulotini o'chirasizmi?`)) { await gorentMutate(() => api.del(`/products/${p.id}`)); onClose(); } }}><IconTrash size={16} /></Btn><Btn kind="ghost" style={{ flex: 1 }} onClick={() => onEdit(p)}><IconEdit size={16} /> {window.AT.edit}</Btn><Btn kind="primary" style={{ flex: 1 }}><IconExternal size={16} /> Saytda ochish</Btn></>}
-          </div>
+          {/* Footer actions — catalog CRUD is platform-only */}
+          {isPlatform && (
+            <div style={{ display: 'flex', gap: 10, padding: '16px 24px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
+              <Btn kind="danger" style={{}} onClick={async () => { if (window.confirm(`"${p.name}" mahsulotini katalogdan o'chirasizmi?`)) { await gorentMutate(() => api.del(`/products/${p.id}`)); onClose(); } }}><IconTrash size={16} /></Btn>
+              <Btn kind="ghost" style={{ flex: 1 }} onClick={() => onEdit(p)}><IconEdit size={16} /> {window.AT.edit}</Btn>
+              <Btn kind="primary" style={{ flex: 1 }}><IconExternal size={16} /> Saytda ochish</Btn>
+            </div>
+          )}
         </>
       )}
     </Drawer>
   );
 }
 
-// ─── Add / edit form (full page) ────────────────────────────
+// ─── Add / edit form (full page) — catalog entry ────────────
+// Platform-only. Name is unique across the catalog — a 409 from the API
+// (duplicate name) surfaces inline under the name field.
 function ProductForm({ product, onClose, onSave }) {
   const isEdit = !!product;
-  const [f, setF] = React.useState(() => product || {
-    title: '', cat: 'private', city: 'Toshkent', district: 'Yunusobod', m2: '', cap: '', price: '', period: 'month', status: 'draft',
+  const [f, setF] = React.useState(() => product ? {
+    name: product.name, cat: product.cat, type: product.type,
+    period: product.period, desc: product.desc || '',
+  } : {
+    name: '', cat: 'private', type: 'room', period: 'month', desc: '',
   });
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
+  const types = (window.META && window.META.unitTypes) || window.UNIT_TYPES;
+  const periods = (window.META && window.META.periods) || window.PERIOD_LABELS;
+
+  const submit = async () => {
+    if (!f.name.trim()) return;
+    setErr(null); setBusy(true);
+    const payload = {
+      name: f.name.trim(), cat: f.cat, type: f.type, period: f.period,
+      desc: f.desc.trim() || undefined,
+    };
+    try {
+      if (isEdit) await api.put(`/products/${product.id}`, payload);
+      else await api.post('/products', payload);
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      onSave();
+    } catch (e) {
+      // 409 — duplicate catalog name; show it inline instead of an alert.
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
 
   return (
     <div style={{ maxWidth: 920, margin: '0 auto' }}>
@@ -2497,8 +2501,11 @@ function ProductForm({ product, onClose, onSave }) {
           <Card>
             <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Asosiy ma'lumotlar</div>
             <div style={{ marginBottom: 16 }}>
-              <Label>Sarlavha</Label>
-              <input className="adm-input" value={f.title} onChange={(e) => set('title', e.target.value)} placeholder="Masalan: Yunusobod biznes minorasi, 7-qavat" />
+              <Label>Nomi (katalogda yagona)</Label>
+              <input className="adm-input" value={f.name} onChange={(e) => { set('name', e.target.value); if (err) setErr(null); }} placeholder="Masalan: Virtual ofis (yuridik manzil)" />
+              {err && (
+                <div style={{ marginTop: 8, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 9 }}>{err}</div>
+              )}
             </div>
             <div style={{ marginBottom: 16 }}>
               <Label>Toifa</Label>
@@ -2519,62 +2526,25 @@ function ProductForm({ product, onClose, onSave }) {
                 })}
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
               <div>
-                <Label>Shahar</Label>
-                <select className="adm-select" style={{ width: '100%' }} value={f.city} onChange={(e) => set('city', e.target.value)}>
-                  {window.CITIES.map((c) => <option key={c}>{c}</option>)}
+                <Label>Birlik turi</Label>
+                <select className="adm-select" style={{ width: '100%' }} value={f.type}
+                  onChange={(e) => { const type = e.target.value; setF((s) => ({ ...s, type, period: (types[type] || {}).defaultPeriod || s.period })); }}>
+                  {Object.entries(types).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
               </div>
               <div>
-                <Label>Tuman</Label>
-                <select className="adm-select" style={{ width: '100%' }} value={f.district} onChange={(e) => set('district', e.target.value)}>
-                  {window.DISTRICTS_TASHKENT.map((d) => <option key={d}>{d}</option>)}
-                </select>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>O'lcham va narx</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 16 }}>
-              <div>
-                <Label>Maydoni (m²)</Label>
-                <input className="adm-input" type="number" value={f.m2} onChange={(e) => set('m2', e.target.value)} placeholder="64" disabled={f.cat === 'virtual'} />
-              </div>
-              <div>
-                <Label>Sig'imi (odam)</Label>
-                <input className="adm-input" type="number" value={f.cap} onChange={(e) => set('cap', e.target.value)} placeholder="8" />
-              </div>
-              <div>
-                <Label>To'lov davri</Label>
+                <Label>Davr</Label>
                 <select className="adm-select" style={{ width: '100%' }} value={f.period} onChange={(e) => set('period', e.target.value)}>
-                  <option value="month">Oyiga</option><option value="day">Kuniga</option><option value="hour">Soatiga</option><option value="desk">Stol/oy</option>
+                  {Object.entries(periods).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
             </div>
             <div>
-              <Label>Narx (so'm)</Label>
-              <div style={{ position: 'relative' }}>
-                <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="12500000" style={{ paddingRight: 70 }} />
-                <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>so'm</span>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Imkoniyatlar</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
-              {window.AMENITIES.map((a, i) => {
-                const on = i < 5;
-                return (
-                  <label key={a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 13px', borderRadius: 10, cursor: 'pointer',
-                    border: '1px solid', borderColor: on ? 'var(--g-brand)' : 'var(--g-line)', background: on ? 'var(--g-brand-soft)' : 'var(--g-card)',
-                    color: on ? 'var(--g-brand-ink)' : 'var(--g-ink-3)', font: `500 12.5px ${window.GO.font}` }}>
-                    <input type="checkbox" defaultChecked={on} style={{ accentColor: 'var(--g-brand)' }} /> {a.name}
-                  </label>
-                );
-              })}
+              <Label>Tavsif (ixtiyoriy)</Label>
+              <textarea className="adm-input" rows={3} style={{ resize: 'vertical', minHeight: 72 }} value={f.desc}
+                onChange={(e) => set('desc', e.target.value)} placeholder="Mahsulot haqida qisqacha ma'lumot…" />
             </div>
           </Card>
 
@@ -2582,45 +2552,27 @@ function ProductForm({ product, onClose, onSave }) {
           {f.cat === 'virtual' && <VirtualIntegrationForm />}
         </div>
 
-        {/* Right: media + publish */}
+        {/* Right: summary + save */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, position: 'sticky', top: 0 }}>
           <Card>
-            <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 14 }}>Rasmlar</div>
+            <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 14 }}>Katalog mahsuloti</div>
             <div style={{ aspectRatio: '4/3', borderRadius: 12, overflow: 'hidden', marginBottom: 10 }}>
-              <PhotoPlaceholder hue={window.CAT_META[f.cat]?.hue || 30} label="asosiy rasm" radius={12} />
+              <PhotoPlaceholder hue={window.CAT_META[f.cat]?.hue ?? 30} label={`katalog · ${f.cat}`} radius={12} />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-              {[0, 1, 2].map((i) => (
-                <div key={i} style={{ aspectRatio: '1', borderRadius: 9, border: '1.5px dashed var(--g-line)', display: 'grid', placeItems: 'center', color: 'var(--g-ink-4)', cursor: 'pointer' }}>
-                  <IconPlus size={18} />
-                </div>
-              ))}
+            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', lineHeight: 1.55 }}>
+              Mahsulot butun platforma uchun umumiy. Har bir bino uni "Takliflar" orqali o'z narxi bilan qo'shadi.
             </div>
+            {isEdit && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--g-line)', display: 'flex', justifyContent: 'space-between', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+                <span>Takliflar</span>
+                <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{(product.offerings || []).length} ta bino</span>
+              </div>
+            )}
           </Card>
 
           <Card>
-            <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 14 }}>Nashr</div>
-            <Label>Holat</Label>
-            <select className="adm-select" style={{ width: '100%', marginBottom: 14 }} value={f.status} onChange={(e) => set('status', e.target.value)}>
-              {Object.entries(window.PRODUCT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-            </select>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 0', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
-              <input type="checkbox" defaultChecked style={{ accentColor: 'var(--g-brand)' }} /> Tezkor band qilish
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '4px 0 12px', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
-              <input type="checkbox" defaultChecked style={{ accentColor: 'var(--g-brand)' }} /> Tasdiqlangan ob'ekt
-            </label>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9, marginTop: 4 }}>
-              <Btn kind="primary" onClick={async () => {
-                const payload = {
-                  title: f.title, cat: f.cat, city: f.city, district: f.district,
-                  m2: f.m2 === '' || f.m2 == null ? undefined : Number(f.m2),
-                  cap: f.cap === '' || f.cap == null ? undefined : Number(f.cap),
-                  price: Number(f.price) || 0, period: f.period, status: f.status,
-                };
-                const ok = await gorentMutate(() => isEdit ? api.put(`/products/${product.id}`, payload) : api.post('/products', payload));
-                if (ok) onSave();
-              }} style={{ justifyContent: 'center' }}>{isEdit ? window.AT.save : 'Nashr qilish'}</Btn>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              <Btn kind="primary" onClick={submit} disabled={busy || !f.name.trim()} style={{ justifyContent: 'center' }}>{busy ? 'Saqlanmoqda…' : (isEdit ? window.AT.save : "Katalogga qo'shish")}</Btn>
               <Btn kind="ghost" onClick={onClose} style={{ justifyContent: 'center' }}>{window.AT.cancel}</Btn>
             </div>
           </Card>
@@ -2629,14 +2581,13 @@ function ProductForm({ product, onClose, onSave }) {
     </div>
   );
 }
-
 Object.assign(window, { ProductsScreen, ProductForm });
 
 // ============================================================
 // src/admin-sections.jsx
 // ============================================================
 
-// admin-sections.jsx — Gorent Admin: Bookings, Hosts, Customers, Revenue, Reviews.
+// admin-sections.jsx — Gorent Admin: Bookings, Hosts, Buildings, Revenue, Reviews.
 
 // ─── Filter chips row (status) ──────────────────────────────
 function StatusChips({ dict, value, setValue, counts }) {
@@ -2665,12 +2616,20 @@ function StatusChips({ dict, value, setValue, counts }) {
 // ═══ BOOKINGS ═══════════════════════════════════════════════
 function BookingDetailDrawer({ b, onClose, onEdit }) {
   if (!b) return <Drawer open={false} onClose={onClose} width={520}><div /></Drawer>;
+  const unit = b.unit || {};
+  const offering = unit.offering || {};
+  const product = offering.product || {};
+  const building = offering.building || {};
+  const period = product.period || 'month';
+  // Unit price overrides the offering (building-level) price when set.
+  const price = unit.effectivePrice ?? unit.price ?? offering.price ?? 0;
   const fee = Math.round(b.total * 0.12);
   const payout = b.total - fee;
+  const isHourly = period === 'hour';
   const steps = [
-    { label: "So'rov yuborilgan", date: b.start, done: true },
-    { label: "Mezbon tasdiqladi", date: b.start, done: b.status !== 'pending' },
-    { label: "To'lov amalga oshirildi", date: b.start, done: ['active', 'confirmed', 'completed'].includes(b.status) },
+    { label: "So'rov yuborilgan", date: fmtDate(b.start), done: true },
+    { label: "Mezbon tasdiqladi", date: fmtDate(b.start), done: b.status !== 'pending' },
+    { label: "To'lov amalga oshirildi", date: fmtDate(b.start), done: ['active', 'confirmed', 'completed'].includes(b.status) },
     { label: b.status === 'cancelled' ? "Bekor qilindi" : "Yakunlandi", date: '—', done: ['completed', 'cancelled'].includes(b.status) },
   ];
   return (
@@ -2687,23 +2646,23 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
       </div>
 
       <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
-        {/* Product */}
+        {/* Unit */}
         <div style={{ display: 'flex', gap: 13, padding: 14, borderRadius: 13, background: 'var(--g-bg)', marginBottom: 18 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 11, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={b.product.hue} label="" radius={11} /></div>
+          <div style={{ width: 56, height: 56, borderRadius: 11, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={nameHue(building.name)} label="" radius={11} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `600 14px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.product.title}</div>
-            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '3px 0 7px' }}>{b.product.district}, {b.product.city}</div>
-            <CatTag cat={b.product.cat} />
+            <div style={{ font: `600 14px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{unit.name || '—'} <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}>· {window.unitTypeMeta(product.type).short}</span></div>
+            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '3px 0 7px' }}>{product.name || '—'} · {building.name || '—'}{building.district ? `, ${building.district}` : ''}</div>
+            {product.cat && <CatTag cat={product.cat} />}
           </div>
         </div>
 
         {/* Customer */}
         <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 10 }}>Mijoz</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-          <Avatar name={b.customer} size={42} hue={b.cust_hue} />
+          <Avatar name={b.customer} size={42} hue={nameHue(b.customer)} />
           <div style={{ flex: 1 }}>
             <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.customer}</div>
-            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.company} · +{b.phone}</div>
+            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.companyRef?.name ? `${b.companyRef.name} (INN ${b.companyRef.inn}) · ` : ''}+{b.phone}</div>
           </div>
           <IconBtn title="Xabar" style={{ border: '1px solid var(--g-line)' }}><IconMessage size={16} /></IconBtn>
           <IconBtn title={`+${b.phone}`} onClick={() => window.open(`tel:+${b.phone}`)} style={{ border: '1px solid var(--g-line)' }}><IconPhone size={16} /></IconBtn>
@@ -2711,7 +2670,12 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
 
         {/* Period + payment grid */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
-          {[['Boshlanish', b.start], ['Muddat', `${b.months} oy`], ['Oylik narx', window.fmtCompactSom(b.product.price) + " so'm"], ['To\u2019lov usuli', 'UZCARD']].map(([k, v]) => (
+          {[
+            ['Boshlanish', isHourly ? `${fmtDate(b.start)} ${fmtTimeHM(b.start)}` : fmtDate(b.start)],
+            ['Tugash', isHourly ? `${fmtDate(b.end)} ${fmtTimeHM(b.end)}` : fmtDate(b.end)],
+            ['Muddat', b.months ? `${b.months} oy` : fmtBookingRange(b)],
+            ['Narx', `${window.fmtCompactSom(price)} so'm/${window.periodLabel(period)} × ${b.qty || 1}`],
+          ].map(([k, v]) => (
             <div key={k} style={{ background: 'var(--g-bg)', borderRadius: 11, padding: '11px 13px' }}>
               <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{k}</div>
               <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', marginTop: 3 }}>{v}</div>
@@ -2730,6 +2694,9 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
             <span>Mezbonga to'lov</span><span>{window.fmtSom(payout)} so'm</span>
           </div>
         </div>
+
+        {/* Money loop — payments, extra charges, contract (skip cancelled) */}
+        {b.status !== 'cancelled' && <BookingMoneySections b={b} />}
 
         {/* Timeline */}
         <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 12 }}>Holat tarixi</div>
@@ -2759,29 +2726,108 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
   );
 }
 
+// New-booking form. Month-period units take a company (required) + months;
+// hour/day units take start/end with an availability preview for the day.
+// Edits only touch customer / phone / company (PATCH contract).
 function BookingForm({ booking, onClose, onSave }) {
   const isEdit = !!booking;
   const [f, setF] = React.useState(() => booking ? {
-    customer: booking.customer, company: booking.company, companyStir: booking.companyStir || '', companyId: booking.companyId || '', phone: booking.phone || '',
-    productId: booking.product.id, months: booking.months,
-    start: booking.start, status: booking.status,
+    unitId: booking.unitId, customer: booking.customer, phone: booking.phone || '',
+    companyId: booking.companyId || '', qty: booking.qty || 1, months: booking.months || 1,
+    date: '', startTime: '09:00', endTime: '10:00', endDate: '',
   } : {
-    customer: '', company: '', companyStir: '', companyId: '', phone: '', productId: window.PRODUCTS[0]?.id || '',
-    months: 1, start: '', status: 'pending',
+    unitId: ((window.UNITS || [])[0] || {}).id || '', customer: '', phone: '', companyId: '',
+    qty: 1, months: 1, date: '', startTime: '09:00', endTime: '10:00', endDate: '',
   });
+  const [companies, setCompanies] = React.useState(() => window.COMPANIES || []);
+  const [avail, setAvail] = React.useState(null);
+  const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
-  const selectedProduct = window.PRODUCTS.find((p) => p.id === f.productId);
+
+  const units = window.UNITS || [];
+  const unit = units.find((u) => u.id === f.unitId);
+  const period = (unit && unit.offering?.product?.period) || 'month';
+  // GET /units returns effectivePrice (unit.price ?? offering.price).
+  const unitPrice = (u) => u.effectivePrice ?? u.price ?? u.offering?.price ?? 0;
+
+  // Hosts don't get companies preloaded — fetch on demand for the select.
+  React.useEffect(() => {
+    if (companies.length) return;
+    api.get('/companies').then((d) => setCompanies(d || [])).catch(() => {});
+  }, []);
+
+  // Busy slots for hour/day units on the picked date.
+  React.useEffect(() => {
+    setAvail(null);
+    if (isEdit || !unit || period === 'month' || !f.date) return undefined;
+    let live = true;
+    api.get(`/bookings/availability?unit=${encodeURIComponent(unit.id)}&date=${encodeURIComponent(f.date)}`)
+      .then((d) => { if (live) setAvail(d); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [f.unitId, f.date, isEdit]);
+
+  // Client-side start/end + total preview.
+  const startDt = period === 'hour'
+    ? (f.date && f.startTime ? new Date(`${f.date}T${f.startTime}`) : null)
+    : (f.date ? new Date(`${f.date}T00:00:00`) : null);
+  const endDt = period === 'hour'
+    ? (f.date && f.endTime ? new Date(`${f.date}T${f.endTime}`) : null)
+    : period === 'day'
+    ? (f.endDate ? new Date(`${f.endDate}T00:00:00`) : null)
+    : null;
+  let spanCount = 0;
+  let spanLabel = '';
+  if (period === 'month') {
+    spanCount = Number(f.months) || 0;
+    spanLabel = `${spanCount} oy`;
+  } else if (startDt && endDt && endDt > startDt) {
+    const ms = endDt.getTime() - startDt.getTime();
+    spanCount = period === 'hour' ? Math.ceil(ms / 3600000) : Math.max(1, Math.ceil(ms / 86400000));
+    spanLabel = `${spanCount} ${window.periodLabel(period)}`;
+  }
+  const total = unit ? unitPrice(unit) * spanCount * (Number(f.qty) || 1) : 0;
+
+  const canSubmit = isEdit
+    ? !!f.customer.trim()
+    : !!(f.customer.trim() && unit && startDt
+        && (period === 'month' ? (Number(f.months) > 0 && f.companyId) : (endDt && endDt > startDt)));
 
   const submit = async () => {
-    if (!f.customer.trim() || !f.productId) return;
-    setBusy(true);
+    if (!canSubmit) return;
+    setErr(null); setBusy(true);
     try {
-      const payload = { ...f, months: Number(f.months), companyStir: f.companyStir.trim() || null, companyId: f.companyId || null };
-      await gorentMutate(() => isEdit ? api.patch(`/bookings/${booking.id}`, payload) : api.post('/bookings', payload));
+      if (isEdit) {
+        await api.patch(`/bookings/${booking.id}`, {
+          customer: f.customer.trim(), phone: f.phone.trim(), companyId: f.companyId || null,
+        });
+      } else if (period === 'month') {
+        await api.post('/bookings', {
+          unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
+          companyId: f.companyId, months: Number(f.months), start: startDt.toISOString(), qty: Number(f.qty) || 1,
+        });
+      } else {
+        await api.post('/bookings', {
+          unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
+          start: startDt.toISOString(), end: endDt.toISOString(), qty: Number(f.qty) || 1,
+          ...(f.companyId ? { companyId: f.companyId } : {}),
+        });
+      }
+      if (window.__gorentRefresh) await window.__gorentRefresh();
       onSave();
-    } catch (e) { window.alert(e.message); setBusy(false); }
+    } catch (e) {
+      // 409 (slot band) / 400 come back with an Uzbek message — surface it inline.
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  const unitLabel = (u) => {
+    const prod = u.offering?.product || {};
+    const tm = window.unitTypeMeta(prod.type);
+    return `${u.offering?.building?.name || '—'} · ${prod.name || '—'} · ${u.name} (${tm.short}, ${window.fmtSom(unitPrice(u))} so'm/${window.periodLabel(prod.period)})`;
   };
 
   return (
@@ -2805,88 +2851,118 @@ function BookingForm({ booking, onClose, onSave }) {
               </div>
             </div>
             <div>
-              <Label>Kompaniya (ijarachi)</Label>
-              <select className="adm-select" style={{ width: '100%' }} value={f.companyId}
-                onChange={(e) => {
-                  const c = (window.COMPANIES || []).find((x) => x.id === e.target.value);
-                  if (c) setF((s) => ({ ...s, companyId: c.id, company: c.name, companyStir: c.inn }));
-                  else setF((s) => ({ ...s, companyId: '' }));
-                }}>
-                <option value="">— Qo'lda kiritish —</option>
-                {(window.COMPANIES || []).map((c) => <option key={c.id} value={c.id}>{c.name} · INN {c.inn}</option>)}
+              <Label>Kompaniya (ijarachi){!isEdit && period === 'month' ? ' — majburiy' : ''}</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.companyId} onChange={(e) => set('companyId', e.target.value)}>
+                <option value="">— Tanlanmagan —</option>
+                {companies.map((c) => <option key={c.id} value={c.id}>{c.name} · INN {c.inn}</option>)}
               </select>
-            </div>
-            {f.companyId ? (
-              <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--g-bg)', borderRadius: 8, font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
-                Hisob-faktura <b style={{ color: 'var(--g-ink)' }}>{f.company}</b> (INN {f.companyStir}) nomiga rasmiylashtiriladi.
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-                <div>
-                  <Label>Kompaniya nomi</Label>
-                  <input className="adm-input" value={f.company} onChange={(e) => set('company', e.target.value)} placeholder="Epam Systems" />
+              {!isEdit && period === 'month' && !f.companyId && (
+                <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.14 70)' }}>
+                  Oylik ijara uchun kompaniya tanlash majburiy (hisob-faktura shu nomga chiqadi).
                 </div>
-                <div>
-                  <Label>Kompaniya STIR (hisob-faktura uchun)</Label>
-                  <input className="adm-input" value={f.companyStir} onChange={(e) => set('companyStir', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
-                </div>
-              </div>
-            )}
-          </Card>
-
-          <Card>
-            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Mahsulot va muddat</div>
-            <div style={{ marginBottom: 14 }}>
-              <Label>Mahsulot</Label>
-              <select className="adm-select" style={{ width: '100%' }} value={f.productId} onChange={(e) => set('productId', e.target.value)}>
-                {window.PRODUCTS.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-              </select>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-              <div>
-                <Label>Boshlanish sanasi</Label>
-                <input className="adm-input" value={f.start} onChange={(e) => set('start', e.target.value)} placeholder="01.07.2026" />
-              </div>
-              <div>
-                <Label>Muddat (oy)</Label>
-                <input className="adm-input" type="number" min={1} max={24} value={f.months} onChange={(e) => set('months', Number(e.target.value))} />
-              </div>
+              )}
             </div>
           </Card>
 
-          <Card>
-            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Holat</div>
-            <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-              {Object.entries(window.BOOKING_STATUS).map(([k, v]) => {
-                const active = f.status === k;
-                return (
-                  <button key={k} onClick={() => set('status', k)} style={{
-                    padding: '7px 14px', borderRadius: 8, cursor: 'pointer', font: `600 12.5px ${window.GO.font}`,
-                    border: '1.5px solid', borderColor: active ? `oklch(0.52 0.13 ${v.hue})` : 'var(--g-line)',
-                    background: active ? `oklch(0.95 0.04 ${v.hue})` : 'var(--g-card)',
-                    color: active ? `oklch(0.35 0.1 ${v.hue})` : 'var(--g-ink-3)',
-                  }}>{v.label}</button>
-                );
-              })}
-            </div>
-          </Card>
+          {!isEdit && (
+            <Card>
+              <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Birlik va muddat</div>
+              <div style={{ marginBottom: 14 }}>
+                <Label>Birlik</Label>
+                <select className="adm-select" style={{ width: '100%' }} value={f.unitId} onChange={(e) => set('unitId', e.target.value)}>
+                  {units.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
+                </select>
+              </div>
+
+              {period === 'month' ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                  <div>
+                    <Label>Boshlanish sanasi</Label>
+                    <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Muddat (oy)</Label>
+                    <input className="adm-input" type="number" min={1} max={24} value={f.months} onChange={(e) => set('months', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Soni</Label>
+                    <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                  </div>
+                </div>
+              ) : period === 'hour' ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 14 }}>
+                  <div>
+                    <Label>Sana</Label>
+                    <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Boshlanish</Label>
+                    <input className="adm-input" type="time" value={f.startTime} onChange={(e) => set('startTime', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Tugash</Label>
+                    <input className="adm-input" type="time" value={f.endTime} onChange={(e) => set('endTime', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Soni</Label>
+                    <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                  <div>
+                    <Label>Boshlanish sanasi</Label>
+                    <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Tugash sanasi</Label>
+                    <input className="adm-input" type="date" value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Soni</Label>
+                    <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                  </div>
+                </div>
+              )}
+
+              {/* Availability — busy slots on the picked date */}
+              {period !== 'month' && f.date && avail && (
+                <div style={{ marginTop: 14, padding: '11px 13px', borderRadius: 10, background: 'var(--g-bg)' }}>
+                  <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 6 }}>
+                    Bandlik · {fmtDate(f.date + 'T00:00:00')}
+                  </div>
+                  {(avail.busy || []).length === 0
+                    ? <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)' }}>Bu kunda band emas — barcha vaqtlar bo'sh.</div>
+                    : (avail.busy || []).map((s) => (
+                        <div key={s.id} style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.15 25)', marginBottom: 3 }}>
+                          Band: {period === 'hour' ? `${fmtTimeHM(s.start)}–${fmtTimeHM(s.end)}` : `${fmtDate(s.start)} – ${fmtDate(s.end)}`} ({s.qty}/{avail.qty})
+                        </div>
+                      ))}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {err && (
+            <div style={{ font: `500 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '11px 14px', borderRadius: 10 }}>{err}</div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {selectedProduct && (
+          {unit && (
             <Card>
-              <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 12 }}>Tanlangan mahsulot</div>
-              <div style={{ width: '100%', height: 100, borderRadius: 10, overflow: 'hidden', marginBottom: 10 }}><PhotoPlaceholder hue={selectedProduct.hue} label={selectedProduct.title} radius={10} /></div>
-              <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 4 }}>{selectedProduct.title}</div>
-              <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 8 }}>{selectedProduct.district}, {selectedProduct.city}</div>
+              <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 12 }}>Tanlangan birlik</div>
+              <div style={{ width: '100%', height: 100, borderRadius: 10, overflow: 'hidden', marginBottom: 10 }}><PhotoPlaceholder hue={unit.offering?.building?.hue ?? nameHue(unit.name)} label={unit.name} radius={10} /></div>
+              <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 4 }}>{unit.name} · {window.unitTypeMeta(unit.offering?.product?.type).short}</div>
+              <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 8 }}>{unit.offering?.product?.name} · {unit.offering?.building?.name}</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
-                <span>Oylik narx</span>
-                <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{window.fmtCompactSom(selectedProduct.price)} so'm</span>
+                <span>Narx</span>
+                <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{window.fmtCompactSom(unitPrice(unit))} so'm/{window.periodLabel(period)}</span>
               </div>
-              {f.months > 0 && (
+              {!isEdit && spanCount > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
-                  <span>Jami ({f.months} oy)</span>
-                  <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(selectedProduct.price * f.months)} so'm</span>
+                  <span>Jami ({spanLabel} × {Number(f.qty) || 1})</span>
+                  <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(total)} so'm</span>
                 </div>
               )}
             </Card>
@@ -2894,7 +2970,7 @@ function BookingForm({ booking, onClose, onSave }) {
 
           <Card>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <Btn kind="primary" style={{ justifyContent: 'center' }} onClick={submit} disabled={busy || !f.customer.trim() || !f.productId}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+              <Btn kind="primary" style={{ justifyContent: 'center' }} onClick={submit} disabled={busy || !canSubmit}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
               <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
             </div>
           </Card>
@@ -2910,24 +2986,23 @@ function BookingsScreen({ search, role, route, setRoute }) {
   const openDetail = (b) => setRoute({ section: 'bookings', sub: 'detail', id: b.id });
   const closeDetail = () => setRoute({ section: 'bookings' });
   let rows = window.BOOKINGS.filter((b) => status === 'all' || b.status === status);
-  if (role === 'host') rows = rows.filter((_, i) => i % 2 === 0);
-  if (search) rows = rows.filter((b) => (b.id + b.customer + b.company + b.product.title).toLowerCase().includes(search.toLowerCase()));
+  if (search) rows = rows.filter((b) => (b.id + ' ' + b.customer + ' ' + (b.companyRef?.name || '') + ' ' + (b.unit?.name || '') + ' ' + (b.unit?.offering?.product?.name || '') + ' ' + (b.unit?.offering?.building?.name || '')).toLowerCase().includes(search.toLowerCase()));
   const counts = { all: window.BOOKINGS.length };
   Object.keys(window.BOOKING_STATUS).forEach((k) => counts[k] = window.BOOKINGS.filter((b) => b.status === k).length);
 
   const columns = [
     { key: 'id', label: 'ID', render: (b) => <span style={{ fontFamily: 'ui-monospace, monospace', font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{b.id}</span> },
-    { key: 'cust', label: 'Mijoz', render: (b) => <PersonCell name={b.customer} sub={b.company} hue={b.cust_hue} /> },
-    { key: 'prod', label: 'Mahsulot', render: (b) => (
+    { key: 'cust', label: 'Mijoz', render: (b) => <PersonCell name={b.customer} sub={b.companyRef?.name} hue={nameHue(b.customer)} /> },
+    { key: 'unit', label: 'Birlik', render: (b) => (
       <div style={{ minWidth: 0 }}>
-        <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{b.product.title}</div>
-        <div style={{ marginTop: 4 }}><CatTag cat={b.product.cat} /></div>
+        <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{b.unit?.name || '—'} <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}>· {b.unit?.offering?.building?.name || '—'}</span></div>
+        {b.unit?.offering?.product?.cat && <div style={{ marginTop: 4 }}><CatTag cat={b.unit.offering.product.cat} /></div>}
       </div>
     ) },
     { key: 'period', label: 'Muddat', render: (b) => (
       <div>
-        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.start}</div>
-        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.months} oy</div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{fmtBookingRange(b)}</div>
+        {b.months ? <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.months} oy</div> : null}
       </div>
     ) },
     { key: 'total', label: 'Summa', align: 'right', render: (b) => <MoneyCell n={b.total} /> },
@@ -2954,10 +3029,16 @@ function BookingsScreen({ search, role, route, setRoute }) {
 }
 
 // ═══ HOSTS ══════════════════════════════════════════════════
-function HostDetailDrawer({ h, onClose, openProduct, onEdit }) {
+function HostDetailDrawer({ h, onClose, onEdit }) {
+  // Full detail (buildings + payout) comes from /hosts/:id.
+  const [full, setFull] = React.useState(null);
+  React.useEffect(() => {
+    setFull(null);
+    if (h && h.id) api.get(`/hosts/${h.id}`).then(setFull).catch(() => {});
+  }, [h && h.id]);
   if (!h) return <Drawer open={false} onClose={onClose} width={560}><div /></Drawer>;
-  const listings = window.PRODUCTS.filter((_, pi) => pi % window.HOSTS.length === window.HOSTS.indexOf(h));
-  const payout = window.PAYOUTS.find((p) => p.host.id === h.id);
+  const buildings = (full && full.buildings) || [];
+  const payout = full && full.payout;
   return (
     <Drawer open={!!h} onClose={onClose} width={560}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0 }}>
@@ -2984,10 +3065,10 @@ function HostDetailDrawer({ h, onClose, openProduct, onEdit }) {
         {/* Stat tiles */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 22 }}>
           {[
-            { l: "E\u2019lonlar", v: h.listings },
+            { l: "E'lonlar", v: h.listings },
             { l: 'Bandlovlar', v: h.bookings },
-            { l: 'Baho', v: h.rating.toFixed(2) },
-            { l: "Qo\u2019shilgan", v: h.joined },
+            { l: 'Baho', v: (h.rating || 0).toFixed(2) },
+            { l: "Qo'shilgan", v: h.joined },
           ].map((s) => (
             <div key={s.l} style={{ background: 'var(--g-bg)', borderRadius: 12, padding: '13px 14px' }}>
               <div style={{ font: `700 18px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.02em' }}>{s.v}</div>
@@ -3008,22 +3089,24 @@ function HostDetailDrawer({ h, onClose, openProduct, onEdit }) {
           </div>
         </div>
 
-        {/* Listings */}
+        {/* Buildings */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Mezbon e'lonlari</div>
-          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{listings.length} ta</span>
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Mezbon binolari</div>
+          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{buildings.length} ta</span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {listings.map((p) => (
-            <div key={p.id} className="adm-row" onClick={() => openProduct && openProduct(p)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 10, borderRadius: 12, background: 'var(--g-bg)', cursor: openProduct ? 'pointer' : 'default' }}>
-              <div style={{ width: 42, height: 42, borderRadius: 9, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={p.hue} label="" radius={9} /></div>
+          {!full && <div style={{ padding: '14px 12px', borderRadius: 12, background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>}
+          {full && buildings.length === 0 && <div style={{ padding: '14px 12px', borderRadius: 12, background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Hozircha binolar yo'q.</div>}
+          {buildings.map((b) => (
+            <div key={b.id} className="adm-row" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 10, borderRadius: 12, background: 'var(--g-bg)' }}>
+              <div style={{ width: 42, height: 42, borderRadius: 9, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={b.hue ?? 30} label="" radius={9} /></div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}><CatTag cat={p.cat} /><StatusPill s={p.status} size="sm" /></div>
+                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.name}</div>
+                <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.address} · {b.district}, {b.city}</div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(p.price)}</div>
-                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{p.bookings} band</div>
+                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{(b.offerings || []).length} ta taklif</div>
+                <div style={{ marginTop: 3 }}><StatusPill s={b.status} size="sm" /></div>
               </div>
             </div>
           ))}
@@ -3158,118 +3241,436 @@ function HostsScreen({ search, route, setRoute }) {
   );
 }
 
-// ═══ CUSTOMERS ══════════════════════════════════════════════
-function CustomerDetailDrawer({ c, onClose }) {
-  if (!c) return <Drawer open={false} onClose={onClose} width={520}><div /></Drawer>;
-  const myBookings = window.BOOKINGS.filter((b) => b.customer === c.name);
-  const regular = c.bookings > 1;
+// ═══ BUILDINGS (binolar) ════════════════════════════════════
+function BuildingsScreen({ search, role }) {
+  const [status, setStatus] = React.useState('all');
+  const [editing, setEditing] = React.useState(null); // null | {} (new) | building (edit)
+
+  let rows = window.BUILDINGS || [];
+  if (status !== 'all') rows = rows.filter((b) => b.status === status);
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((b) => `${b.id} ${b.name} ${b.address} ${b.district} ${b.city} ${b.ownerName || ''} ${b.kadastrNumber || ''}`.toLowerCase().includes(q));
+  }
+  const counts = { all: (window.BUILDINGS || []).length };
+  Object.keys(window.PRODUCT_STATUS).forEach((k) => counts[k] = (window.BUILDINGS || []).filter((b) => b.status === k).length);
+
+  if (editing) return <BuildingForm building={editing.id ? editing : null} role={role} onClose={() => setEditing(null)} />;
+
+  const columns = [
+    { key: 'id', label: 'ID', render: (b) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{b.id}</span> },
+    { key: 'name', label: 'Nomi', render: (b) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={b.hue ?? 30} label="" radius={10} /></div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{b.name}</div>
+          {b.marketplace && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3, padding: '2px 8px', borderRadius: 999, background: 'oklch(0.95 0.05 155)', color: 'oklch(0.42 0.12 155)', font: `600 10.5px ${window.GO.font}` }}>
+              <IconEye size={11} /> Marketplace
+            </span>
+          )}
+        </div>
+      </div>
+    ) },
+    { key: 'address', label: 'Manzil', render: (b) => (
+      <div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.address}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{b.district} · {b.city}</div>
+      </div>
+    ) },
+    { key: 'owner', label: 'Egasi', render: (b) => (
+      <div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.ownerName || '—'}</div>
+        {b.ownerInn && <div style={{ font: `400 11.5px ui-monospace, monospace`, color: 'var(--g-ink-4)', marginTop: 1 }}>INN {b.ownerInn}</div>}
+      </div>
+    ) },
+    { key: 'kadastr', label: 'Kadastr raqami', render: (b) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ font: `500 12.5px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{b.kadastrNumber || '—'}</span>
+        {b.kadastrFile && <span title="Kadastr fayli yuklangan" style={{ color: 'oklch(0.52 0.13 155)', display: 'flex' }}><IconDoc size={14} /></span>}
+      </div>
+    ) },
+    { key: 'offerings', label: 'Takliflar', align: 'center', render: (b) => <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{(b.offerings || []).length}</span> },
+    { key: 'status', label: window.AT.status, render: (b) => <StatusPill s={b.status} /> },
+    { key: 'act', label: '', align: 'right', render: (b) => (
+      <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}>
+        {role === 'platform' && b.status === 'pending' && (
+          <>
+            <IconBtn title={window.AT.approve} onClick={() => gorentMutate(() => api.post(`/buildings/${b.id}/approve`))} style={{ color: 'oklch(0.52 0.13 155)' }}><IconCheck2 size={16} /></IconBtn>
+            <IconBtn title={window.AT.reject} onClick={() => gorentMutate(() => api.post(`/buildings/${b.id}/reject`))} style={{ color: 'oklch(0.55 0.16 25)' }}><IconX2 size={16} /></IconBtn>
+          </>
+        )}
+        <IconBtn title={window.AT.edit} onClick={() => setEditing(b)}><IconEdit size={16} /></IconBtn>
+        <IconBtn title={window.AT.delete} style={{ color: 'oklch(0.55 0.16 25)' }} onClick={() => window.confirm(`"${b.name}" binosini o'chirasizmi?`) && gorentMutate(() => api.del(`/buildings/${b.id}`))}><IconTrash size={16} /></IconBtn>
+      </div>
+    ) },
+  ];
+
   return (
-    <Drawer open={!!c} onClose={onClose} width={520}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0 }}>
-        <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
-        {regular
-          ? <span style={{ font: `600 11.5px ${window.GO.font}`, color: 'var(--g-brand-ink)', background: 'var(--g-brand-soft)', padding: '5px 12px', borderRadius: 999 }}>Doimiy mijoz</span>
-          : <span style={{ font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)', background: 'var(--g-bg-2)', padding: '5px 12px', borderRadius: 999 }}>Yangi mijoz</span>}
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
+        <StatusChips dict={window.PRODUCT_STATUS} value={status} setValue={setStatus} counts={counts} />
+        <Btn kind="primary" sm onClick={() => setEditing({})}><IconPlus size={15} /> Bino qo'shish</Btn>
       </div>
-
-      <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
-          <Avatar name={c.name} size={56} hue={c.hue} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `700 18px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.02em' }}>{c.name}</div>
-            <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>{c.company} · +{c.phone} · {c.city}</div>
-          </div>
-          <IconBtn title="Xabar" style={{ border: '1px solid var(--g-line)' }}><IconMessage size={16} /></IconBtn>
-          <IconBtn title="Qo'ng'iroq" style={{ border: '1px solid var(--g-line)' }}><IconPhone size={16} /></IconBtn>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 22 }}>
-          {[
-            { l: 'Bandlovlar', v: c.bookings },
-            { l: 'Sarflangan', v: window.fmtCompactSom(c.spent) },
-            { l: "O\u2019rtacha chek", v: window.fmtCompactSom(Math.round(c.spent / c.bookings)) },
-          ].map((s) => (
-            <div key={s.l} style={{ background: 'var(--g-bg)', borderRadius: 12, padding: '13px 14px' }}>
-              <div style={{ font: `700 17px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.02em' }}>{s.v}</div>
-              <div style={{ font: `500 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{s.l}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Bandlovlar tarixi</div>
-          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{myBookings.length} ta</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {myBookings.map((b) => (
-            <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 10, borderRadius: 12, background: 'var(--g-bg)' }}>
-              <div style={{ width: 42, height: 42, borderRadius: 9, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={b.product.hue} label="" radius={9} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{b.product.title}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                  <span style={{ font: `400 11px ui-monospace, monospace`, color: 'var(--g-ink-4)' }}>{b.id}</span>
-                  <StatusPill s={b.status} dict={window.BOOKING_STATUS} size="sm" />
-                </div>
-              </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(b.total)}</div>
-                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.start}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: 10, padding: '16px 22px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
-        <Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }}><IconMessage size={16} /> Xabar yuborish</Btn>
-        <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }}><IconExternal size={16} /> To'liq profil</Btn>
-      </div>
-    </Drawer>
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(b) => setEditing(b)} empty="Hozircha binolar yo'q" />
+    </div>
   );
 }
 
-function CustomersScreen({ search }) {
-  const [detail, setDetail] = React.useState(null);
-  const fallback = React.useMemo(() => {
-    const map = {};
-    window.BOOKINGS.forEach((b) => {
-      if (!map[b.customer]) map[b.customer] = { name: b.customer, company: b.company, hue: b.cust_hue, bookings: 0, spent: 0, city: b.product.city };
-      map[b.customer].bookings += 1; map[b.customer].spent += b.total;
-    });
-    return Object.values(map);
-  }, []);
-  const [apiRows, setApiRows] = React.useState(null);
-  React.useEffect(() => {
-    api.get('/customers').then((data) => { if (data && data.length > 0) setApiRows(data); }).catch(() => {});
-  }, []);
-  let rows = apiRows || fallback;
-  if (search) rows = rows.filter((c) => (c.name + c.company).toLowerCase().includes(search.toLowerCase()));
-  const columns = [
-    { key: 'cust', label: 'Mijoz', render: (c) => <PersonCell name={c.name} sub={c.company} hue={c.hue} /> },
-    { key: 'city', label: 'Shahar', render: (c) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{c.city}</span> },
-    { key: 'bookings', label: 'Bandlovlar', align: 'center', render: (c) => <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{c.bookings}</span> },
-    { key: 'spent', label: 'Sarflangan', align: 'right', render: (c) => <MoneyCell n={c.spent} /> },
-    { key: 'type', label: 'Toifa', render: (c) => c.bookings > 1
-      ? <span style={{ font: `600 11.5px ${window.GO.font}`, color: 'var(--g-brand-ink)', background: 'var(--g-brand-soft)', padding: '4px 10px', borderRadius: 999 }}>Doimiy mijoz</span>
-      : <span style={{ font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)', background: 'var(--g-bg-2)', padding: '4px 10px', borderRadius: 999 }}>Yangi</span> },
-    { key: 'act', label: '', align: 'right', render: (c) => <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}><IconBtn onClick={() => setDetail(c)}><IconEye size={16} /></IconBtn><IconBtn><IconMessage size={16} /></IconBtn></div> },
-  ];
-  return (
-    <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
-        <StatCard icon={<IconUser size={17} />} label="Jami mijozlar" value={String(rows.length)} unit="ta" />
-        <StatCard icon={<IconHome size={17} />} label="Doimiy mijozlar" value={String(rows.filter((c) => c.bookings > 1).length)} unit="ta" />
-        <StatCard icon={<IconCal size={17} />} label="O'rtacha muddat" value={window.BOOKINGS.length ? (window.BOOKINGS.reduce((s, b) => s + b.months, 0) / window.BOOKINGS.length).toFixed(1) : '0'} unit="oy" />
-        <StatCard icon={<IconWallet size={17} />} label="O'rtacha chek" value={window.BOOKINGS.length ? window.fmtCompactSom(Math.round(window.BOOKINGS.reduce((s, b) => s + b.total, 0) / window.BOOKINGS.length)) : '0'} unit="so'm" />
+// ─── Takliflar — offerings: this building supports a catalog product ─
+// An offering pins a building-level PRICE onto a global product; units under
+// it can override that price (empty price = "bino narxi").
+function AddOfferingForm({ building, onDone }) {
+  const offered = new Set((building.offerings || []).map((o) => o.productId || o.product?.id));
+  const available = (window.PRODUCTS || []).filter((p) => !offered.has(p.id));
+  const [f, setF] = React.useState(() => ({ productId: (available[0] || {}).id || '', price: '', qty: 1 }));
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+  const product = available.find((p) => p.id === f.productId);
+
+  const submit = async () => {
+    if (!f.productId || !f.price) return;
+    setErr(null); setBusy(true);
+    try {
+      await api.post('/offerings', { buildingId: building.id, productId: f.productId, price: Number(f.price), qty: Number(f.qty) || 1 });
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      onDone();
+    } catch (e) {
+      // 409 — the building already offers this product.
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  if (!available.length) {
+    return (
+      <div style={{ padding: '14px 16px', borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+        Katalogdagi barcha mahsulotlar bu binoda allaqachon taklif qilingan.
       </div>
-      <DataTable columns={columns} rows={rows} rowKey={(r) => r.name} onRow={(c) => setDetail(c)} />
-      <CustomerDetailDrawer c={detail} onClose={() => setDetail(null)} />
+    );
+  }
+  return (
+    <div style={{ padding: 14, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)' }}>
+      <div style={{ font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Yangi taklif</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
+        <div>
+          <Label>Katalog mahsuloti</Label>
+          <select className="adm-select" style={{ width: '100%' }} value={f.productId} onChange={(e) => set('productId', e.target.value)}>
+            {available.map((p) => <option key={p.id} value={p.id}>{p.name} · {window.unitTypeMeta(p.type).short}</option>)}
+          </select>
+        </div>
+        <div>
+          <Label>Narx (so'm/{window.periodLabel(product?.period || 'month')})</Label>
+          <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="2500000" />
+        </div>
+        <div>
+          <Label>Soni (birlik zaxirasi)</Label>
+          <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+        </div>
+      </div>
+      {err && (
+        <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 9 }}>{err}</div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn kind="ghost" sm onClick={onDone}>{window.AT.cancel}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !f.productId || !f.price}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// One offering row: product + building-level price (inline edit), status,
+// approve/reject (platform), delete, plus unit management underneath.
+function OfferingRow({ offering: o, role, building }) {
+  const [priceEdit, setPriceEdit] = React.useState(false);
+  const [price, setPrice] = React.useState(o.price ?? '');
+  const [unitEditor, setUnitEditor] = React.useState(null); // null | 'new' | unit
+  const [busy, setBusy] = React.useState(false);
+  const product = o.product || {};
+  const units = o.units || [];
+  const tm = window.unitTypeMeta(product.type);
+  const isPlatform = role === 'platform';
+
+  const savePrice = async () => {
+    if (price === '' || Number(price) <= 0) return;
+    setBusy(true);
+    const ok = await gorentMutate(() => api.patch(`/offerings/${o.id}`, { price: Number(price) }));
+    setBusy(false);
+    if (ok) setPriceEdit(false);
+  };
+
+  return (
+    <div style={{ borderRadius: 13, border: '1px solid var(--g-line)', background: 'var(--g-card)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px' }}>
+        <span style={{ width: 36, height: 36, borderRadius: 9, flexShrink: 0, display: 'grid', placeItems: 'center',
+          background: `oklch(0.95 0.04 ${tm.hue})`, color: `oklch(0.45 0.14 ${tm.hue})`, font: `700 11px ${window.GO.font}` }}>{String(tm.short).slice(0, 2)}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{product.name || '—'} <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}>· {tm.short}</span></div>
+          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{units.length} ta birlik · {window.catShort(product.cat)}</div>
+        </div>
+        {priceEdit ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+            <input className="adm-input" type="number" value={price} onChange={(e) => setPrice(e.target.value)} style={{ width: 130 }} autoFocus />
+            <Btn kind="primary" sm onClick={savePrice} disabled={busy || price === '' || Number(price) <= 0}><IconCheck size={14} /></Btn>
+            <Btn kind="ghost" sm onClick={() => { setPriceEdit(false); setPrice(o.price ?? ''); }}><IconClose size={14} /></Btn>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+            <button onClick={() => setPriceEdit(true)} title="Narxni tahrirlash" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'transparent', border: 0, cursor: 'pointer', padding: 0, font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+              {window.fmtCompactSom(o.price || 0)} so'm/{window.periodLabel(product.period)} <IconEdit size={12} />
+            </button>
+            <div style={{ marginTop: 3 }}><StatusPill s={o.status} size="sm" /></div>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+          {/* Marketplace visibility for this offering (effective only when the
+              building itself is opted in). */}
+          <IconBtn
+            title={o.listed !== false ? "Marketplace'da ko'rinadi — yashirish" : "Marketplace'dan yashirilgan — ko'rsatish"}
+            onClick={() => gorentMutate(() => api.patch(`/offerings/${o.id}`, { listed: o.listed === false }))}
+            style={{ width: 28, height: 28, color: o.listed !== false ? 'oklch(0.52 0.13 155)' : 'var(--g-ink-4)' }}
+          ><IconEye size={14} /></IconBtn>
+          {isPlatform && o.status === 'pending' && (
+            <>
+              <IconBtn title={window.AT.approve} onClick={() => gorentMutate(() => api.post(`/offerings/${o.id}/approve`))} style={{ width: 28, height: 28, color: 'oklch(0.52 0.13 155)' }}><IconCheck2 size={14} /></IconBtn>
+              <IconBtn title={window.AT.reject} onClick={() => gorentMutate(() => api.post(`/offerings/${o.id}/reject`))} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconX2 size={14} /></IconBtn>
+            </>
+          )}
+          <IconBtn title={window.AT.delete} onClick={() => window.confirm(`"${product.name}" taklifini o'chirasizmi? Uning birliklari ham o'chadi.`) && gorentMutate(() => api.del(`/offerings/${o.id}`))} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>
+        </div>
+      </div>
+
+      {/* Units under this offering */}
+      <div style={{ padding: '10px 14px 12px', borderTop: '1px solid var(--g-line)', background: 'var(--g-bg)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Birliklar ({units.length} ta)</div>
+          <Btn kind="ghost" sm onClick={() => setUnitEditor('new')}><IconPlus size={13} /> Birlik qo'shish</Btn>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {units.length === 0 && unitEditor !== 'new' && (
+            <div style={{ padding: '12px 12px', borderRadius: 10, background: 'var(--g-card)', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'center' }}>
+              Hozircha birliklar yo'q.
+            </div>
+          )}
+          {units.map((u) => unitEditor && unitEditor !== 'new' && unitEditor.id === u.id ? (
+            <UnitEditor key={u.id} unit={u} offering={o} onDone={() => setUnitEditor(null)} />
+          ) : (
+            <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, background: 'var(--g-card)', border: '1px solid var(--g-line)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name}</div>
+                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+                  {u.qty} ta · {u.capacity ? `${u.capacity} ${window.T.people}` : '—'} · {u.m2 ? `${u.m2} m²` : '—'}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+                  {u.price != null
+                    ? <>{window.fmtCompactSom(u.price)} so'm/{window.periodLabel(product.period)}</>
+                    : <span style={{ color: 'var(--g-ink-3)' }}>Bino narxi · {window.fmtCompactSom(o.price || 0)} so'm/{window.periodLabel(product.period)}</span>}
+                </div>
+                <div style={{ marginTop: 2 }}><StatusPill s={u.status} size="sm" /></div>
+              </div>
+              <div style={{ display: 'flex', gap: 2 }}>
+                <IconBtn title={window.AT.edit} onClick={() => setUnitEditor(u)} style={{ width: 26, height: 26 }}><IconEdit size={13} /></IconBtn>
+                <IconBtn title={window.AT.delete} onClick={() => window.confirm(`"${u.name}" birligini o'chirasizmi?`) && gorentMutate(() => api.del(`/units/${u.id}`))} style={{ width: 26, height: 26, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={13} /></IconBtn>
+              </div>
+            </div>
+          ))}
+          {unitEditor === 'new' && <UnitEditor unit={null} offering={o} onDone={() => setUnitEditor(null)} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BuildingOfferings({ building, role }) {
+  const [adding, setAdding] = React.useState(false);
+  // Re-resolve from the live dataset so offering/unit CRUD refreshes show up.
+  const live = (window.BUILDINGS || []).find((x) => x.id === building.id) || building;
+  const offerings = live.offerings || [];
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Takliflar</div>
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>Bu bino qo'llab-quvvatlaydigan katalog mahsulotlari va bino narxlari</div>
+        </div>
+        <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Taklif qo'shish</Btn>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {offerings.length === 0 && !adding && (
+          <div style={{ padding: '18px 14px', borderRadius: 12, background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'center' }}>
+            Hozircha takliflar yo'q — katalogdan mahsulot tanlab, bino narxini belgilang.
+          </div>
+        )}
+        {offerings.map((o) => <OfferingRow key={o.id} offering={o} role={role} building={live} />)}
+        {adding && <AddOfferingForm building={live} onDone={() => setAdding(false)} />}
+      </div>
+    </Card>
+  );
+}
+
+function BuildingForm({ building, role, onClose }) {
+  const isEdit = !!building;
+  const [f, setF] = React.useState(() => building ? {
+    name: building.name, address: building.address || '', city: building.city || 'Toshkent',
+    district: building.district || window.DISTRICTS_TASHKENT[0], ownerName: building.ownerName || '',
+    ownerInn: building.ownerInn || '', ownerPhone: building.ownerPhone || '',
+    kadastrNumber: building.kadastrNumber || '', status: building.status || 'draft',
+    marketplace: !!building.marketplace,
+  } : {
+    name: '', address: '', city: 'Toshkent', district: window.DISTRICTS_TASHKENT[0],
+    ownerName: '', ownerInn: '', ownerPhone: '', kadastrNumber: '', status: 'draft',
+    marketplace: false, // default: private SaaS usage
+  });
+  const [kadastrFile, setKadastrFile] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
+
+  const submit = async () => {
+    if (!f.name.trim() || !f.address.trim() || !f.ownerName.trim()) { window.alert("Bino nomi, manzil va egasi to'ldirilishi shart"); return; }
+    setBusy(true);
+    try {
+      const payload = {
+        name: f.name.trim(), address: f.address.trim(), city: f.city, district: f.district,
+        ownerName: f.ownerName.trim(),
+        ownerInn: f.ownerInn.trim() || null,
+        ownerPhone: f.ownerPhone.trim() || null,
+        kadastrNumber: f.kadastrNumber.trim() || null,
+        status: f.status,
+        marketplace: f.marketplace,
+      };
+      const saved = isEdit ? await api.patch(`/buildings/${building.id}`, payload) : await api.post('/buildings', payload);
+      if (kadastrFile) await api.upload(`/buildings/${saved.id}/kadastr`, kadastrFile);
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      onClose();
+    } catch (e) { window.alert(e.message); setBusy(false); }
+  };
+
+  const viewKadastr = async () => {
+    // Open the tab synchronously (inside the click) so it isn't popup-blocked
+    // after the await; then point it at the fetched blob for inline preview.
+    const w = window.open('', '_blank');
+    try {
+      const url = await api.fileBlobUrl(`/buildings/${building.id}/kadastr`);
+      if (w) w.location = url; else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      if (w) w.close();
+      window.alert(e.message);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <button onClick={onClose} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--g-ink-3)', font: `600 13px ${window.GO.font}`, marginBottom: 16, padding: 0 }}>
+        <IconChevL size={16} /> {window.AT.back}
+      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>{isEdit ? 'Binoni tahrirlash' : 'Yangi bino'}</div>
+          <div style={{ marginBottom: 14 }}>
+            <Label>Bino nomi</Label>
+            <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="Yunusobod biznes minorasi" />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <Label>Manzil</Label>
+            <input className="adm-input" value={f.address} onChange={(e) => set('address', e.target.value)} placeholder="Amir Temur shoh ko'chasi, 108" />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <div>
+              <Label>Shahar</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.city} onChange={(e) => set('city', e.target.value)}>
+                {window.CITIES.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>Tuman</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.district} onChange={(e) => set('district', e.target.value)}>
+                {window.DISTRICTS_TASHKENT.map((d) => <option key={d}>{d}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>Holat</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.status} onChange={(e) => set('status', e.target.value)}>
+                {Object.entries(window.PRODUCT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Bino egasi</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+            <div>
+              <Label>Egasi (F.I.Sh. yoki tashkilot)</Label>
+              <input className="adm-input" value={f.ownerName} onChange={(e) => set('ownerName', e.target.value)} placeholder="Aziza Rashidova" />
+            </div>
+            <div>
+              <Label>Egasining INN (STIR)</Label>
+              <input className="adm-input" value={f.ownerInn} onChange={(e) => set('ownerInn', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
+            </div>
+            <div>
+              <Label>Telefon raqami</Label>
+              <input className="adm-input" value={f.ownerPhone} onChange={(e) => set('ownerPhone', e.target.value)} placeholder="+998901234567" />
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Kadastr hujjati</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'end' }}>
+            <div>
+              <Label>Kadastr raqami</Label>
+              <input className="adm-input" value={f.kadastrNumber} onChange={(e) => set('kadastrNumber', e.target.value)} placeholder="10:09:03:04:01:0001" />
+            </div>
+            <div>
+              <Label>Kadastr skani (PDF/rasm, ≤10MB)</Label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setKadastrFile(e.target.files?.[0] || null)}
+                  style={{ font: `400 12px ${window.GO.font}`, flex: 1, minWidth: 0 }} />
+                {isEdit && building?.kadastrFile && <Btn kind="ghost" sm onClick={viewKadastr}><IconEye size={14} /> Ko'rish</Btn>}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* Marketplace opt-in — off by default: the owner just uses the SaaS
+            privately; on: building + listed offerings appear on the public
+            marketplace API (owner/kadastr details are never exposed there). */}
+        <Card>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
+            <div>
+              <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Marketplace</div>
+              <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 4, maxWidth: 520 }}>
+                Yoqilsa — bino va uning ko'rsatilgan takliflari ochiq marketplace'da e'lon qilinadi.
+                O'chiq bo'lsa, tizim faqat ichki boshqaruv (SaaS) uchun ishlaydi. Egasi va kadastr ma'lumotlari hech qachon oshkor qilinmaydi.
+              </div>
+            </div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 9, cursor: 'pointer', font: `600 13px ${window.GO.font}`, color: f.marketplace ? 'oklch(0.52 0.13 155)' : 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={f.marketplace} onChange={(e) => set('marketplace', e.target.checked)} style={{ width: 17, height: 17, accentColor: 'oklch(0.52 0.13 155)' }} />
+              {f.marketplace ? "Marketplace'da" : 'Yopiq (faqat SaaS)'}
+            </label>
+          </div>
+        </Card>
+
+        {/* Takliflar — supported catalog products at this building's price */}
+        {isEdit && <BuildingOfferings building={building} role={role} />}
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={submit} disabled={busy}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+          <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ═══ REVENUE & PAYOUTS ══════════════════════════════════════
-function RevenueScreen({ search }) {
+function RevenueScreen({ search, role }) {
   const platformFee = Math.round(window.totalRevenue * 0.12);
   const columns = [
     { key: 'id', label: 'To\u2019lov ID', render: (p) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{p.id}</span> },
@@ -3317,6 +3718,9 @@ function RevenueScreen({ search }) {
           </div>
         </Card>
       </div>
+
+      {/* Monthly payout statements (hisobotlar) — generated per host per period */}
+      <PayoutStatementsPanel role={role} />
 
       <SectionHead title="To'lovlar tarixi" right={<Btn kind="ghost" sm><IconDownload size={15} /> {window.AT.export}</Btn>} />
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} />
@@ -3405,8 +3809,17 @@ function CompanyForm({ company, onClose }) {
   };
 
   const viewFile = async (kind) => {
-    try { const url = await api.fileBlobUrl(`/companies/${company.id}/files/${kind}`); window.open(url, '_blank'); }
-    catch (e) { window.alert(e.message); }
+    // Open the tab synchronously (inside the click) so it isn't popup-blocked
+    // after the await; then point it at the fetched blob for inline preview.
+    const w = window.open('', '_blank');
+    try {
+      const url = await api.fileBlobUrl(`/companies/${company.id}/files/${kind}`);
+      if (w) w.location = url; else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      if (w) w.close();
+      window.alert(e.message);
+    }
   };
 
   // One KYC document row: reference number + scan upload (+ view existing scan).
@@ -3487,6 +3900,17 @@ const INVOICE_STATUS = {
   sent:          { label: "Yuborilgan", hue: 155 },
   error:         { label: "Xatolik", hue: 25 },
 };
+// Payment status derived from invoice.payments (Σ amount vs invoice.amount).
+const INVOICE_PAY_STATUS = {
+  unpaid:  { label: "To'lanmagan", hue: 25 },
+  partial: { label: "Qisman",      hue: 70 },
+  paid:    { label: "To'langan",   hue: 155 },
+};
+function invoicePaidSum(inv) { return (inv.payments || []).reduce((s, p) => s + (p.amount || 0), 0); }
+function invoicePayKey(inv) {
+  const paid = invoicePaidSum(inv);
+  return paid <= 0 ? 'unpaid' : paid < inv.amount ? 'partial' : 'paid';
+}
 
 function currentInvoicePeriod() {
   const d = new Date();
@@ -3498,12 +3922,26 @@ function InvoicesScreen({ search }) {
   const [generating, setGenerating] = React.useState(false);
   const [signingIds, setSigningIds] = React.useState(() => new Set());
   const [selected, setSelected] = React.useState(() => new Set());
+  const [preview, setPreview] = React.useState(null); // GET /invoices/preview result
+  const [previewBusy, setPreviewBusy] = React.useState(false);
   const busy = signingIds.size > 0;
+
+  // Month-end review BEFORE generating: which bookings would be invoiced,
+  // with rent + attached charges and any already-existing invoice.
+  const loadPreview = async () => {
+    setPreviewBusy(true);
+    try {
+      setPreview(await api.get(`/invoices/preview?period=${encodeURIComponent(period)}`));
+    } catch (e) {
+      window.alert(e && e.message ? e.message : 'Xatolik yuz berdi');
+    }
+    setPreviewBusy(false);
+  };
 
   let rows = window.INVOICES || [];
   if (search) {
     const q = search.toLowerCase();
-    rows = rows.filter((inv) => `${inv.period} ${inv.booking?.id} ${inv.booking?.customer} ${inv.booking?.company}`.toLowerCase().includes(q));
+    rows = rows.filter((inv) => `${inv.period} ${inv.booking?.id} ${inv.booking?.customer} ${inv.booking?.companyRef?.name}`.toLowerCase().includes(q));
   }
   const signable = rows.filter((r) => r.status === 'ready_to_sign');
   const selectedList = signable.filter((r) => selected.has(r.id));
@@ -3542,7 +3980,7 @@ function InvoicesScreen({ search }) {
           const signature = await eimzo.signBase64(base64, cert);
           await api.post(`/invoices/${inv.id}/sign`, { signature });
         } catch (e) {
-          failures.push(`${inv.booking?.company || inv.id}: ${e.message}`);
+          failures.push(`${inv.booking?.companyRef?.name || inv.id}: ${e.message}`);
         }
       }
       if (window.__gorentRefresh) await window.__gorentRefresh();
@@ -3564,8 +4002,19 @@ function InvoicesScreen({ search }) {
       ? <input type="checkbox" checked={selected.has(inv.id)} disabled={busy} onChange={() => toggleOne(inv.id)} style={{ cursor: 'pointer', width: 15, height: 15 }} />
       : null },
     { key: 'period', label: 'Davr', render: (inv) => <span style={{ font: `600 12.5px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{inv.period}</span> },
-    { key: 'booking', label: 'Bandlov / Xaridor', render: (inv) => <PersonCell name={inv.booking?.company || inv.booking?.customer || inv.bookingId} sub={inv.booking?.id} hue={inv.booking?.cust_hue} /> },
+    { key: 'booking', label: 'Bandlov / Xaridor', render: (inv) => <PersonCell name={inv.booking?.companyRef?.name || inv.booking?.customer || inv.bookingId} sub={inv.booking?.id} hue={nameHue(inv.booking?.companyRef?.name || inv.booking?.customer)} /> },
     { key: 'amount', label: 'Summa', align: 'right', render: (inv) => <MoneyCell n={inv.amount} /> },
+    { key: 'pay', label: "To'lov", render: (inv) => {
+      const paidSum = invoicePaidSum(inv);
+      return (
+        <div>
+          <StatusPill s={invoicePayKey(inv)} dict={INVOICE_PAY_STATUS} size="sm" />
+          {paidSum > 0 && paidSum < inv.amount && (
+            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 4 }}>{window.fmtSom(paidSum)} / {window.fmtSom(inv.amount)}</div>
+          )}
+        </div>
+      );
+    } },
     { key: 'status', label: window.AT.status, render: (inv) => (
       <div>
         <StatusPill s={inv.status} dict={INVOICE_STATUS} size="sm" />
@@ -3590,8 +4039,73 @@ function InvoicesScreen({ search }) {
           <Label_>Davr</Label_>
           <input className="adm-input" style={{ width: 130 }} value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="2026-06" />
         </div>
-        <Btn kind="primary" sm disabled={generating || busy} onClick={generate}><IconDoc size={15} /> {generating ? 'Yaratilmoqda…' : "Oylik hisob-fakturalarni yaratish"}</Btn>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn kind="ghost" sm disabled={previewBusy || busy} onClick={loadPreview}><IconEye size={15} /> {previewBusy ? 'Yuklanmoqda…' : 'Oy yakuni'}</Btn>
+          <Btn kind="primary" sm disabled={generating || busy} onClick={generate}><IconDoc size={15} /> {generating ? 'Yaratilmoqda…' : "Oylik hisob-fakturalarni yaratish"}</Btn>
+        </div>
       </div>
+
+      {/* Month-end preview panel — review rent + charges before generation */}
+      {preview && (
+        <Card pad={0} style={{ marginBottom: 16, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '16px 20px', borderBottom: '1px solid var(--g-line)', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Oy yakuni · {preview.period}</div>
+              <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{preview.count} ta hisob-faktura · jami {window.fmtSom(preview.total)} so'm</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Btn kind="ghost" sm onClick={() => setPreview(null)}>Yopish</Btn>
+              <Btn kind="primary" sm disabled={generating} onClick={async () => {
+                setGenerating(true);
+                const ok = await gorentMutate(() => api.post('/invoices/generate', { period: preview.period }));
+                setGenerating(false);
+                if (ok) setPreview(null);
+              }}><IconCheck2 size={14} /> {generating ? 'Yaratilmoqda…' : 'Tasdiqlash va yaratish'}</Btn>
+            </div>
+          </div>
+          <div className="adm-scroll" style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead>
+                <tr style={{ background: 'var(--g-bg)' }}>
+                  {['Bandlov / Mijoz', 'Joy', 'Ijara', 'Xarajatlar', 'Jami', 'Mavjud'].map((h, i) => (
+                    <th key={h} style={{ textAlign: i >= 2 && i <= 4 ? 'right' : 'left', padding: '11px 16px', font: `600 11px ${window.GO.font}`, color: 'var(--g-ink-4)', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', borderBottom: '1px solid var(--g-line)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(preview.rows || []).map((r, i) => (
+                  <tr key={r.bookingId} style={{ borderBottom: i < preview.rows.length - 1 ? '1px solid var(--g-line)' : 0 }}>
+                    <td style={{ padding: '11px 16px' }}>
+                      <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{r.company?.name || r.customer}</div>
+                      <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.customer}{r.company?.inn ? ` · INN ${r.company.inn}` : ''} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</span></div>
+                    </td>
+                    <td style={{ padding: '11px 16px', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{r.building} · {r.unit}</td>
+                    <td style={{ padding: '11px 16px', textAlign: 'right', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{window.fmtSom(r.rent)}</td>
+                    <td style={{ padding: '11px 16px', textAlign: 'right' }}>
+                      {(r.charges || []).length === 0
+                        ? <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>—</span>
+                        : (r.charges || []).map((ch) => (
+                            <div key={ch.id} style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>
+                              {ch.title} <span style={{ fontWeight: 600, color: 'var(--g-ink-2)' }}>{window.fmtSom(ch.amount)}</span>
+                            </div>
+                          ))}
+                    </td>
+                    <td style={{ padding: '11px 16px', textAlign: 'right', font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{window.fmtSom(r.total)} so'm</td>
+                    <td style={{ padding: '11px 16px' }}>
+                      {r.existingInvoice
+                        ? <div>
+                            <StatusPill s="x" dict={{ x: { label: 'Mavjud', hue: 70 } }} size="sm" />
+                            <div style={{ font: `400 11px ui-monospace, monospace`, color: 'var(--g-ink-4)', marginTop: 3 }}>{r.existingInvoice.id}</div>
+                          </div>
+                        : <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {selectedList.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 14px', marginBottom: 12, background: 'var(--g-brand-soft)', border: '1px solid var(--g-line)', borderRadius: 10 }}>
@@ -3617,7 +4131,7 @@ function ReviewsScreen({ search }) {
   const [filter, setFilter] = React.useState('all');
   const dict = { published: { label: 'Nashr etilgan', hue: 155 }, pending: { label: 'Kutilmoqda', hue: 70 }, flagged: { label: 'Belgilangan', hue: 25 } };
   let rows = window.REVIEWS.filter((r) => filter === 'all' || r.state === filter);
-  if (search) rows = rows.filter((r) => (r.author + r.text + r.product.title).toLowerCase().includes(search.toLowerCase()));
+  if (search) rows = rows.filter((r) => (r.author + r.text + (r.building?.name || '')).toLowerCase().includes(search.toLowerCase()));
   const counts = { all: window.REVIEWS.length };
   Object.keys(dict).forEach((k) => counts[k] = window.REVIEWS.filter((r) => r.state === k).length);
 
@@ -3648,7 +4162,7 @@ function ReviewsScreen({ search }) {
             </div>
             <div style={{ font: `400 13.5px ${window.GO.font}`, color: 'var(--g-ink-2)', lineHeight: 1.5 }}>"{r.text}"</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-              <IconBuilding size={13} /> <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.product.title}</span>
+              <IconBuilding size={13} /> <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.building?.name || '—'}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 12, borderTop: '1px solid var(--g-line)' }}>
               <StatusPill s={r.state} dict={dict} size="sm" />
@@ -3665,7 +4179,830 @@ function ReviewsScreen({ search }) {
   );
 }
 
-Object.assign(window, { BookingsScreen, HostsScreen, CustomersScreen, RevenueScreen, InvoicesScreen, ReviewsScreen, StatusChips });
+Object.assign(window, { BookingsScreen, HostsScreen, BuildingsScreen, BuildingForm, RevenueScreen, InvoicesScreen, ReviewsScreen, StatusChips });
+
+// ============================================================
+// src/admin-money.jsx
+// ============================================================
+
+// admin-money.jsx — Gorent Admin: money loop — Qarzdorlik (debtors), payments,
+// extra charges, Shartnomalar (contracts) and monthly payout statements.
+
+// ─── Small centered modal ───────────────────────────────────
+function GoModal({ open, onClose, title, width = 460, children }) {
+  if (!open) return null;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 95, display: 'grid', placeItems: 'center' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(20,16,12,0.45)' }} />
+      <div className="adm-scroll" style={{ position: 'relative', width, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto',
+        background: 'var(--g-card)', border: '1px solid var(--g-line)', borderRadius: 16, boxShadow: window.GO.shadowLg, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>{title}</div>
+          <IconBtn title="Yopish" onClick={onClose}><IconClose size={16} /></IconBtn>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── Record-payment form (reusable) ─────────────────────────
+// POST /payments {bookingId, amount, method, paidAt, note?}. `defaultAmount`
+// prefills the outstanding balance when opened from a debtor row.
+function PaymentForm({ bookingId, defaultAmount, onDone, onCancel }) {
+  const today = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const [f, setF] = React.useState(() => ({
+    amount: defaultAmount && defaultAmount > 0 ? defaultAmount : '',
+    method: 'bank', date: today(), note: '',
+  }));
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+  const canSubmit = Number(f.amount) >= 1 && !!f.date;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setErr(null); setBusy(true);
+    try {
+      await api.post('/payments', {
+        bookingId,
+        amount: Number(f.amount),
+        method: f.method,
+        paidAt: new Date(`${f.date}T12:00:00`).toISOString(),
+        ...(f.note.trim() ? { note: f.note.trim() } : {}),
+      });
+      onDone();
+    } catch (e) {
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div>
+          <Label>Summa (so'm)</Label>
+          <input className="adm-input" type="number" min={1} value={f.amount} onChange={(e) => set('amount', e.target.value)} placeholder="1000000" />
+        </div>
+        <div>
+          <Label>Usul</Label>
+          <select className="adm-select" style={{ width: '100%' }} value={f.method} onChange={(e) => set('method', e.target.value)}>
+            {Object.entries(window.PAYMENT_METHODS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+        <div>
+          <Label>Sana</Label>
+          <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+        </div>
+        <div>
+          <Label>Izoh (ixtiyoriy)</Label>
+          <input className="adm-input" value={f.note} onChange={(e) => set('note', e.target.value)} placeholder="—" />
+        </div>
+      </div>
+      {err && (
+        <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 9 }}>{err}</div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        {onCancel && <Btn kind="ghost" sm onClick={onCancel}>{window.AT.cancel}</Btn>}
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !canSubmit}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : "To'lovni saqlash"}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ═══ QARZDORLIK (accrual receivables) ═══════════════════════
+function MoneyStatCard({ icon, label, value, unit = "so'm", color = 'var(--g-ink)' }) {
+  return (
+    <Card pad={18} style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 9, display: 'grid', placeItems: 'center', background: 'var(--g-brand-soft)', color: 'var(--g-brand-ink)' }}>{icon}</div>
+        <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{label}</div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 5 }}>
+        <div style={{ font: `700 27px ${window.GO.font}`, color, letterSpacing: '-0.03em' }}>{value}</div>
+        {unit && <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{unit}</div>}
+      </div>
+    </Card>
+  );
+}
+
+function DebtorsScreen({ search }) {
+  const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, debtorCount: 0 }, rows: [] };
+  const totals = data.totals || { outstanding: 0, prepaid: 0, debtorCount: 0 };
+  const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
+
+  let rows = data.rows || [];
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((r) => `${r.customer} ${r.company?.name || ''} ${r.building} ${r.unit}`.toLowerCase().includes(q));
+  }
+
+  const columns = [
+    { key: 'cust', label: 'Mijoz', render: (r) => (
+      <PersonCell name={r.customer} sub={`${r.company?.name ? r.company.name + ' · ' : ''}+${r.phone}`} hue={nameHue(r.customer)} />
+    ) },
+    { key: 'place', label: 'Joy', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{r.building} · {r.unit}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.product} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</span></div>
+      </div>
+    ) },
+    { key: 'period', label: 'Muddat', render: (r) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{fmtDate(r.start)} – {fmtDate(r.end)}</span> },
+    { key: 'expected', label: 'Kutilgan', align: 'right', render: (r) => <MoneyCell n={r.expected} /> },
+    { key: 'paid', label: "To'langan", align: 'right', render: (r) => <MoneyCell n={r.paid} /> },
+    { key: 'outstanding', label: 'Qoldiq', align: 'right', render: (r) => r.outstanding > 0
+      ? <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', whiteSpace: 'nowrap' }}>{window.fmtSom(r.outstanding)} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm</span></div>
+      : <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)', whiteSpace: 'nowrap' }}>{window.fmtSom(Math.abs(r.outstanding))} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm oldindan</span></div> },
+    { key: 'act', label: '', align: 'right', render: (r) => (
+      <div onClick={(e) => e.stopPropagation()}>
+        <Btn kind="primary" sm onClick={() => setPaying(r)}><IconPlus size={14} /> To'lov kiritish</Btn>
+      </div>
+    ) },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 18 }}>
+        <MoneyStatCard icon={<IconWarn size={17} />} label="Jami qarz" value={window.fmtCompactSom(totals.outstanding)} color="oklch(0.5 0.16 25)" />
+        <MoneyStatCard icon={<IconUsers size={17} />} label="Qarzdorlar soni" value={String(totals.debtorCount)} unit="ta" />
+        <MoneyStatCard icon={<IconWallet size={17} />} label="Oldindan to'lovlar" value={window.fmtCompactSom(totals.prepaid)} color="oklch(0.5 0.13 155)" />
+      </div>
+
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} empty="Qarzdorlik yo'q 🎉" />
+
+      <GoModal open={!!paying} onClose={() => setPaying(null)} title={paying ? `To'lov kiritish · ${paying.bookingId}` : ''}>
+        {paying && (
+          <>
+            <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 14 }}>
+              {paying.customer}{paying.company?.name ? ` · ${paying.company.name}` : ''} — {paying.building} · {paying.unit}
+              {paying.outstanding > 0 && <span style={{ color: 'oklch(0.5 0.16 25)', fontWeight: 600 }}> · qarz {window.fmtSom(paying.outstanding)} so'm</span>}
+            </div>
+            <PaymentForm
+              bookingId={paying.bookingId}
+              defaultAmount={paying.outstanding > 0 ? paying.outstanding : undefined}
+              onCancel={() => setPaying(null)}
+              onDone={async () => { setPaying(null); if (window.__gorentRefresh) await window.__gorentRefresh(); }}
+            />
+          </>
+        )}
+      </GoModal>
+    </div>
+  );
+}
+
+// ═══ BOOKING DRAWER: payments + charges + contract ══════════
+function ChargeForm({ bookingId, onDone, onCancel }) {
+  const [f, setF] = React.useState({ type: 'utility', title: '', amount: '', period: '' });
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+  const canSubmit = !!f.title.trim() && Number(f.amount) >= 1;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setErr(null); setBusy(true);
+    try {
+      await api.post('/charges', {
+        bookingId, type: f.type, title: f.title.trim(), amount: Number(f.amount),
+        ...(f.period ? { period: f.period } : {}),
+      });
+      onDone();
+    } catch (e) {
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: 12, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)', marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div>
+          <Label>Turi</Label>
+          <select className="adm-select" style={{ width: '100%' }} value={f.type} onChange={(e) => set('type', e.target.value)}>
+            {Object.entries(window.CHARGE_TYPES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <Label>Nomi</Label>
+          <input className="adm-input" value={f.title} onChange={(e) => set('title', e.target.value)} placeholder="Elektr energiyasi" />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+        <div>
+          <Label>Summa (so'm)</Label>
+          <input className="adm-input" type="number" min={1} value={f.amount} onChange={(e) => set('amount', e.target.value)} placeholder="250000" />
+        </div>
+        <div>
+          <Label>Davr (ixtiyoriy)</Label>
+          <input className="adm-input" type="month" value={f.period} onChange={(e) => set('period', e.target.value)} />
+        </div>
+      </div>
+      {err && (
+        <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 9 }}>{err}</div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn kind="ghost" sm onClick={onCancel}>{window.AT.cancel}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !canSubmit}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+      </div>
+    </div>
+  );
+}
+
+function ChargeTypeChip({ type }) {
+  const m = window.CHARGE_TYPES[type] || { label: type, hue: 250 };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: 999,
+      background: `oklch(0.95 0.04 ${m.hue})`, color: `oklch(0.42 0.12 ${m.hue})`, font: `600 10.5px ${window.GO.font}`, whiteSpace: 'nowrap' }}>{m.label}</span>
+  );
+}
+
+function BookingMoneySections({ b }) {
+  const [payments, setPayments] = React.useState(null);
+  const [charges, setCharges] = React.useState(null);
+  const [contract, setContract] = React.useState(undefined); // undefined=loading · null=none
+  const [showPay, setShowPay] = React.useState(false);
+  const [showCharge, setShowCharge] = React.useState(false);
+  const [contractBusy, setContractBusy] = React.useState(false);
+
+  const load = React.useCallback(() => {
+    api.get(`/payments?booking=${encodeURIComponent(b.id)}`).then(setPayments).catch(() => setPayments([]));
+    api.get(`/charges?booking=${encodeURIComponent(b.id)}`).then(setCharges).catch(() => setCharges([]));
+  }, [b.id]);
+  React.useEffect(() => { load(); }, [load]);
+
+  // Contract is only possible for monthly + company bookings.
+  const canContract = (b.unit?.offering?.product?.period === 'month') && !!b.companyRef;
+  React.useEffect(() => {
+    if (!canContract) { setContract(null); return; }
+    setContract(undefined);
+    api.get(`/contracts?search=${encodeURIComponent(b.id)}`)
+      .then((list) => setContract((list || []).find((c) => c.bookingId === b.id) || null))
+      .catch(() => setContract(null));
+  }, [b.id, canContract]);
+
+  // Payments/charges change receivables — refresh local lists now, refresh the
+  // global datasets (debtors badge) in the background.
+  const refreshAll = () => { load(); if (window.__gorentRefresh) window.__gorentRefresh(); };
+
+  const delPayment = async (p) => {
+    if (!window.confirm(`${p.id} to'lovini o'chirasizmi? (tuzatish)`)) return;
+    try { await api.del(`/payments/${p.id}`); refreshAll(); } catch (e) { window.alert(e.message); }
+  };
+  const delCharge = async (c) => {
+    if (!window.confirm(`"${c.title}" xarajatini o'chirasizmi?`)) return;
+    try { await api.del(`/charges/${c.id}`); refreshAll(); } catch (e) { window.alert(e.message); }
+  };
+  const refundCharge = async (c) => {
+    if (!window.confirm(`"${c.title}" kafolat pulini qaytarasizmi?`)) return;
+    try { await api.post(`/charges/${c.id}/refund`, {}); refreshAll(); } catch (e) { window.alert(e.message); }
+  };
+  const createContract = async () => {
+    setContractBusy(true);
+    try {
+      const c = await api.post('/contracts', { bookingId: b.id });
+      setContract(c);
+    } catch (e) { window.alert(e.message); }
+    setContractBusy(false);
+  };
+
+  const muted = (text) => (
+    <div style={{ padding: '11px 12px', borderRadius: 11, background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'center' }}>{text}</div>
+  );
+
+  return (
+    <>
+      {/* To'lovlar */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>To'lovlar{payments ? ` (${payments.length} ta)` : ''}</div>
+          <Btn kind="ghost" sm onClick={() => setShowPay((v) => !v)}><IconPlus size={13} /> To'lov</Btn>
+        </div>
+        {showPay && (
+          <div style={{ padding: 12, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)', marginBottom: 10 }}>
+            <PaymentForm bookingId={b.id} onCancel={() => setShowPay(false)} onDone={() => { setShowPay(false); refreshAll(); }} />
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {!payments && muted('Yuklanmoqda…')}
+          {payments && payments.length === 0 && !showPay && muted("Hozircha to'lovlar yo'q.")}
+          {(payments || []).map((p) => (
+            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--g-bg)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 13px ${window.GO.font}`, color: p.amount < 0 ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)' }}>
+                  {p.amount < 0 ? '−' : ''}{window.fmtSom(Math.abs(p.amount))} so'm
+                  {p.amount < 0 && <span style={{ font: `600 11px ${window.GO.font}`, marginLeft: 6 }}>qaytarildi</span>}
+                </div>
+                <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {(window.PAYMENT_METHODS[p.method] || {}).label || p.method} · {fmtDate(p.paidAt)}{p.invoiceId ? ` · ${p.invoiceId}` : ''}{p.note ? ` · ${p.note}` : ''}
+                </div>
+              </div>
+              <span style={{ font: `500 11px ui-monospace, monospace`, color: 'var(--g-ink-4)', flexShrink: 0 }}>{p.id}</span>
+              <IconBtn title="O'chirish (tuzatish)" onClick={() => delPayment(p)} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Qo'shimcha xarajatlar */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Qo'shimcha xarajatlar{charges ? ` (${charges.length} ta)` : ''}</div>
+          <Btn kind="ghost" sm onClick={() => setShowCharge((v) => !v)}><IconPlus size={13} /> Xarajat</Btn>
+        </div>
+        {showCharge && <ChargeForm bookingId={b.id} onCancel={() => setShowCharge(false)} onDone={() => { setShowCharge(false); refreshAll(); }} />}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {!charges && muted('Yuklanmoqda…')}
+          {charges && charges.length === 0 && !showCharge && muted("Hozircha xarajatlar yo'q.")}
+          {(charges || []).map((c) => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--g-bg)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    textDecoration: c.refundedAt ? 'line-through' : 'none' }}>{c.title}</span>
+                  <ChargeTypeChip type={c.type} />
+                  {c.refundedAt && <span style={{ font: `600 11px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)' }}>qaytarilgan</span>}
+                </div>
+                <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>
+                  {c.period ? `${c.period} · ` : ''}<span style={{ fontFamily: 'ui-monospace, monospace' }}>{c.id}</span>{c.invoiceId ? ` · ${c.invoiceId}` : ''}{c.note ? ` · ${c.note}` : ''}
+                </div>
+              </div>
+              <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', flexShrink: 0, textDecoration: c.refundedAt ? 'line-through' : 'none' }}>{window.fmtSom(c.amount)} so'm</span>
+              {c.type === 'deposit' && !c.refundedAt && (
+                <Btn kind="soft" sm onClick={() => refundCharge(c)}>Qaytarish</Btn>
+              )}
+              <IconBtn title={window.AT.delete} onClick={() => delCharge(c)} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Shartnoma — monthly + company bookings only */}
+      {canContract && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 10 }}>Shartnoma</div>
+          {contract === undefined ? muted('Yuklanmoqda…') : contract ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--g-bg)' }}>
+              <span style={{ color: 'var(--g-ink-3)', display: 'flex' }}><IconDoc size={17} /></span>
+              <span style={{ flex: 1, font: `600 13px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{contract.id}</span>
+              <StatusPill s={contract.derivedStatus || contract.status} dict={window.CONTRACT_STATUS} size="sm" />
+            </div>
+          ) : (
+            <Btn kind="ghost" sm onClick={createContract} disabled={contractBusy}><IconDoc size={14} /> {contractBusy ? 'Yaratilmoqda…' : 'Shartnoma tuzish'}</Btn>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ═══ SHARTNOMALAR (rental contracts) ════════════════════════
+function contractMonthly(c) {
+  const bk = c.booking || {};
+  return bk.months ? Math.round((bk.total || 0) / bk.months) : (bk.total || 0);
+}
+
+// Print-ready contract HTML is auth-gated — fetch as blob, open in a tab that
+// was created synchronously (inside the click) so it isn't popup-blocked.
+async function openContractDocument(c) {
+  const w = window.open('', '_blank');
+  try {
+    const url = await api.fileBlobUrl(`/contracts/${c.id}/document`);
+    if (w) w.location = url; else window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    if (w) w.close();
+    window.alert(e.message);
+  }
+}
+
+// Renew modal — suggested price = current monthly × (1 + indexation%).
+function ContractRenewModal({ c, onClose, onDone }) {
+  const monthly = contractMonthly(c);
+  const suggested = Math.round(monthly * (1 + (Number(c.indexationPct) || 0) / 100));
+  const [months, setMonths] = React.useState(12);
+  const [price, setPrice] = React.useState('');
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+  const effPrice = price === '' ? suggested : Number(price) || 0;
+  const total = (Number(months) || 0) * effPrice;
+
+  const submit = async () => {
+    if (!(Number(months) >= 1)) return;
+    setErr(null); setBusy(true);
+    try {
+      await api.post(`/contracts/${c.id}/renew`, {
+        months: Number(months),
+        ...(price !== '' ? { price: Number(price) } : {}),
+      });
+      onDone();
+    } catch (e) {
+      // 409/400 — availability conflict / invalid state; message shown inline.
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <GoModal open onClose={onClose} title={`Uzaytirish · ${c.id}`}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+        <div>
+          <Label>Muddat (oy)</Label>
+          <input className="adm-input" type="number" min={1} max={36} value={months} onChange={(e) => setMonths(e.target.value)} />
+        </div>
+        <div>
+          <Label>Oylik narx (so'm) — ixtiyoriy</Label>
+          <input className="adm-input" type="number" min={1} value={price} onChange={(e) => setPrice(e.target.value)} placeholder={String(suggested)} />
+          <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 4 }}>
+            Taklif: {window.fmtSom(suggested)} so'm{c.indexationPct ? ` (indeksatsiya ${c.indexationPct}%)` : ''}
+          </div>
+        </div>
+      </div>
+      <div style={{ padding: '11px 13px', borderRadius: 11, background: 'var(--g-bg)', marginBottom: 12 }}>
+        {[
+          ['Yangi oylik', `${window.fmtSom(effPrice)} so'm`],
+          ['Muddat', `${Number(months) || 0} oy`],
+        ].map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+            <span>{k}</span><span style={{ fontWeight: 600, color: 'var(--g-ink-2)' }}>{v}</span>
+          </div>
+        ))}
+        <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid var(--g-line)', font: `700 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+          <span>Jami</span><span>{window.fmtSom(total)} so'm</span>
+        </div>
+      </div>
+      {err && (
+        <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 9 }}>{err}</div>
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn kind="ghost" sm onClick={onClose}>{window.AT.cancel}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !(Number(months) >= 1)}><IconRefresh size={14} /> {busy ? 'Uzaytirilmoqda…' : 'Uzaytirish'}</Btn>
+      </div>
+    </GoModal>
+  );
+}
+
+function ContractDetailDrawer({ c, onClose, onChanged }) {
+  const [renewOpen, setRenewOpen] = React.useState(false);
+  const [soliq, setSoliq] = React.useState('');
+  const [soliqBusy, setSoliqBusy] = React.useState(false);
+  React.useEffect(() => { setSoliq(c ? (c.soliqRegNumber || '') : ''); setRenewOpen(false); }, [c && c.id]);
+  if (!c) return <Drawer open={false} onClose={onClose} width={560}><div /></Drawer>;
+
+  const bk = c.booking || {};
+  const unit = bk.unit || {};
+  const building = unit.offering?.building || {};
+  const product = unit.offering?.product || {};
+  const monthly = contractMonthly(c);
+  const derived = c.derivedStatus || c.status;
+
+  const act = async (fn, confirmMsg) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    try { await fn(); onChanged(); } catch (e) { window.alert(e.message); }
+  };
+  const saveSoliq = async () => {
+    setSoliqBusy(true);
+    try { await api.patch(`/contracts/${c.id}`, { soliqRegNumber: soliq.trim() || null }); onChanged(); }
+    catch (e) { window.alert(e.message); }
+    setSoliqBusy(false);
+  };
+  const terminate = async () => {
+    const note = window.prompt(`${c.id} shartnomasini bekor qilasizmi? Bandlov ham bekor qilinadi. Izoh (ixtiyoriy):`);
+    if (note === null) return;
+    try {
+      await api.post(`/contracts/${c.id}/terminate`, note.trim() ? { note: note.trim() } : {});
+      onChanged(); onClose();
+    } catch (e) { window.alert(e.message); }
+  };
+
+  return (
+    <Drawer open onClose={onClose} width={560}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
+          <div>
+            <div style={{ font: `700 16px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{c.id}</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Ijara shartnomasi</div>
+          </div>
+        </div>
+        <StatusPill s={derived} dict={window.CONTRACT_STATUS} />
+      </div>
+
+      <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
+        {/* Ijarachi */}
+        <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 10 }}>Ijarachi</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <Avatar name={bk.companyRef?.name || bk.customer} size={42} hue={nameHue(bk.companyRef?.name || bk.customer)} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{bk.companyRef?.name || bk.customer}</div>
+            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              {bk.companyRef?.inn ? `INN ${bk.companyRef.inn} · ` : ''}{bk.customer}{bk.phone ? ` · +${bk.phone}` : ''}
+            </div>
+          </div>
+        </div>
+
+        {/* Joy */}
+        <div style={{ display: 'flex', gap: 13, padding: 14, borderRadius: 13, background: 'var(--g-bg)', marginBottom: 20 }}>
+          <div style={{ width: 48, height: 48, borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}><PhotoPlaceholder hue={nameHue(building.name)} label="" radius={10} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{unit.name || '—'} · {building.name || '—'}</div>
+            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>{product.name || '—'}{building.district ? ` · ${building.district}` : ''} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{c.bookingId}</span></div>
+          </div>
+        </div>
+
+        {/* Muddat + narx */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
+          {[
+            ['Boshlanish', fmtDate(c.startsAt)],
+            ['Tugash', fmtDate(c.endsAt)],
+            ['Oylik ijara', `${window.fmtSom(monthly)} so'm`],
+            ['Indeksatsiya', c.indexationPct != null ? `${c.indexationPct}%` : '—'],
+          ].map(([k, v]) => (
+            <div key={k} style={{ background: 'var(--g-bg)', borderRadius: 11, padding: '11px 13px' }}>
+              <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{k}</div>
+              <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', marginTop: 3 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        {derived === 'expiring' && (
+          <div style={{ marginTop: -12, marginBottom: 20, font: `600 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+            Muddati tugashiga {c.daysLeft} kun qoldi
+          </div>
+        )}
+
+        {/* Meta rows */}
+        <div style={{ border: '1px solid var(--g-line)', borderRadius: 13, padding: '4px 16px', marginBottom: 20 }}>
+          {[
+            ['Imzolangan', c.signedAt ? fmtDate(c.signedAt) : '—'],
+            ...(c.terminatedAt ? [['Bekor qilingan', fmtDate(c.terminatedAt)]] : []),
+            ...(c.renewedFrom ? [['Avvalgi shartnoma', c.renewedFrom.id || c.renewedFromId]] : []),
+            ...(c.renewedTo ? [['Yangi shartnoma', c.renewedTo.id]] : []),
+            ...(c.note ? [['Izoh', c.note]] : []),
+          ].map(([k, v]) => (
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 14, padding: '10px 0', borderBottom: '1px solid var(--g-line)', font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+              <span>{k}</span><span style={{ fontWeight: 600, color: 'var(--g-ink)', textAlign: 'right' }}>{v}</span>
+            </div>
+          ))}
+          {/* Soliq registration number — editable */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+            <span style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)', flexShrink: 0 }}>Soliq ro'yxat raqami</span>
+            <input className="adm-input" style={{ flex: 1 }} value={soliq} onChange={(e) => setSoliq(e.target.value)} placeholder="ijara.soliq.uz raqami" />
+            <Btn kind="soft" sm onClick={saveSoliq} disabled={soliqBusy || (soliq || '') === (c.soliqRegNumber || '')}>{soliqBusy ? '…' : window.AT.save}</Btn>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, padding: '16px 22px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
+        <Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => openContractDocument(c)}><IconDoc size={16} /> Hujjat</Btn>
+        {c.status === 'draft' && (
+          <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => act(() => api.post(`/contracts/${c.id}/activate`))}><IconCheck2 size={16} /> Faollashtirish</Btn>
+        )}
+        {c.status === 'active' && (
+          <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setRenewOpen(true)}><IconRefresh size={16} /> Uzaytirish</Btn>
+        )}
+        {['draft', 'active'].includes(c.status) && (
+          <Btn kind="danger" style={{ justifyContent: 'center' }} onClick={terminate}><IconX2 size={16} /></Btn>
+        )}
+      </div>
+
+      {renewOpen && <ContractRenewModal c={c} onClose={() => setRenewOpen(false)} onDone={() => { setRenewOpen(false); onChanged(); }} />}
+    </Drawer>
+  );
+}
+
+function ContractsScreen({ search }) {
+  const [contracts, setContracts] = React.useState(null);
+  const [status, setStatus] = React.useState('all');
+  const [detailId, setDetailId] = React.useState(null);
+
+  const load = React.useCallback(() => {
+    api.get('/contracts').then(setContracts).catch((e) => { console.error(e); setContracts([]); });
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  const all = contracts || [];
+  let rows = all.filter((c) => status === 'all' || (c.derivedStatus || c.status) === status);
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((c) => `${c.id} ${c.bookingId} ${c.booking?.customer || ''} ${c.booking?.companyRef?.name || ''} ${c.booking?.unit?.name || ''} ${c.booking?.unit?.offering?.building?.name || ''}`.toLowerCase().includes(q));
+  }
+  const counts = { all: all.length };
+  Object.keys(window.CONTRACT_STATUS).forEach((k) => counts[k] = all.filter((c) => (c.derivedStatus || c.status) === k).length);
+
+  const columns = [
+    { key: 'id', label: '№', render: (c) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{c.id}</span> },
+    { key: 'tenant', label: 'Ijarachi', render: (c) => (
+      <PersonCell name={c.booking?.companyRef?.name || c.booking?.customer || '—'} sub={c.booking?.customer} hue={nameHue(c.booking?.companyRef?.name || c.booking?.customer)} />
+    ) },
+    { key: 'place', label: 'Joy', render: (c) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{c.booking?.unit?.offering?.building?.name || '—'} · {c.booking?.unit?.name || '—'}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{c.booking?.unit?.offering?.product?.name || ''}</div>
+      </div>
+    ) },
+    { key: 'period', label: 'Muddat', render: (c) => (
+      <div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{fmtDate(c.startsAt)} – {fmtDate(c.endsAt)}</div>
+        {(c.derivedStatus || c.status) === 'expiring' && (
+          <div style={{ font: `600 11.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 2 }}>{c.daysLeft} kun qoldi</div>
+        )}
+      </div>
+    ) },
+    { key: 'monthly', label: 'Oylik', align: 'right', render: (c) => <MoneyCell n={contractMonthly(c)} /> },
+    { key: 'status', label: window.AT.status, render: (c) => <StatusPill s={c.derivedStatus || c.status} dict={window.CONTRACT_STATUS} /> },
+    { key: 'act', label: '', align: 'right', render: (c) => (
+      <div style={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }} onClick={(e) => e.stopPropagation()}>
+        <IconBtn title="Hujjat" onClick={() => openContractDocument(c)}><IconDoc size={16} /></IconBtn>
+        <IconBtn title={window.AT.view} onClick={() => setDetailId(c.id)}><IconEye size={16} /></IconBtn>
+      </div>
+    ) },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
+        <StatusChips dict={window.CONTRACT_STATUS} value={status} setValue={setStatus} counts={counts} />
+        <Btn kind="ghost" sm onClick={load}><IconRefresh size={15} /> Yangilash</Btn>
+      </div>
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(c) => setDetailId(c.id)}
+        empty={contracts ? "Hozircha shartnomalar yo'q" : 'Yuklanmoqda…'} />
+      <ContractDetailDrawer c={all.find((c) => c.id === detailId) || null} onClose={() => setDetailId(null)} onChanged={load} />
+    </div>
+  );
+}
+
+// ═══ PAYOUT STATEMENTS (hisobotlar) ═════════════════════════
+function StatementDetailDrawer({ s, role, onClose, onApprove, onPay }) {
+  if (!s) return <Drawer open={false} onClose={onClose} width={560}><div /></Drawer>;
+  return (
+    <Drawer open onClose={onClose} width={560}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
+          <div>
+            <div style={{ font: `700 15px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{s.id}</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Payout hisoboti · {s.period}</div>
+          </div>
+        </div>
+        <StatusPill s={s.status} dict={window.STATEMENT_STATUS} />
+      </div>
+
+      <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
+        <div style={{ marginBottom: 20 }}>
+          <PersonCell name={s.host?.name || '—'} sub={s.host?.org} hue={s.host?.hue} />
+        </div>
+
+        <div style={{ border: '1px solid var(--g-line)', borderRadius: 13, padding: 16, marginBottom: 20 }}>
+          {[
+            ['Yalpi tushum', window.fmtSom(s.gross) + " so'm"],
+            ['Platforma komissiyasi', '− ' + window.fmtSom(s.commission) + " so'm"],
+            ['Mezbon xizmat haqi', '− ' + window.fmtSom(s.hostFee) + " so'm"],
+          ].map(([k, v]) => (
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 9, font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+              <span>{k}</span><span style={{ color: 'var(--g-ink-2)', fontWeight: 500 }}>{v}</span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 11, borderTop: '1px solid var(--g-line)', font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+            <span>Sof to'lov</span><span>{window.fmtSom(s.net)} so'm</span>
+          </div>
+        </div>
+
+        {(s.approvedAt || s.paidAt || s.reference) && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
+            {[
+              ...(s.approvedAt ? [['Tasdiqlangan', fmtDate(s.approvedAt)]] : []),
+              ...(s.paidAt ? [["To'langan", fmtDate(s.paidAt)]] : []),
+              ...(s.reference ? [["Ma'lumotnoma", s.reference]] : []),
+            ].map(([k, v]) => (
+              <div key={k} style={{ background: 'var(--g-bg)', borderRadius: 11, padding: '11px 13px' }}>
+                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{k}</div>
+                <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', marginTop: 3 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Qatorlar</div>
+          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{(s.lines || []).length} ta to'lov</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {(s.lines || []).length === 0 && (
+            <div style={{ padding: '11px 12px', borderRadius: 11, background: 'var(--g-bg)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'center' }}>Qatorlar yo'q.</div>
+          )}
+          {(s.lines || []).map((l, i) => (
+            <div key={l.paymentId || i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--g-bg)' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 12.5px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{l.paymentId}</div>
+                <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{l.bookingId} · {fmtDate(l.paidAt)} · {window.catShort(l.category)}</div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtSom(l.amount)} so'm</div>
+                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{l.rate}% → {window.fmtSom(l.commission)} so'm</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {role === 'platform' && (s.status === 'draft' || s.status === 'approved') && (
+        <div style={{ display: 'flex', gap: 10, padding: '16px 22px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
+          {s.status === 'draft' && <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => onApprove(s)}><IconCheck2 size={16} /> Tasdiqlash</Btn>}
+          {s.status === 'approved' && <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => onPay(s)}><IconCard size={16} /> To'lash</Btn>}
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+function PayoutStatementsPanel({ role }) {
+  const [period, setPeriod] = React.useState(currentInvoicePeriod());
+  const [rows, setRows] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [detailId, setDetailId] = React.useState(null);
+
+  const load = React.useCallback(() => {
+    api.get(`/payout-statements?period=${encodeURIComponent(period)}`).then(setRows).catch(() => setRows([]));
+  }, [period]);
+  React.useEffect(() => { setRows(null); load(); }, [load]);
+
+  const generate = async () => {
+    setBusy(true);
+    try { await api.post('/payout-statements/generate', { period }); load(); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  };
+  const approve = async (s) => {
+    try { await api.post(`/payout-statements/${s.id}/approve`); load(); } catch (e) { window.alert(e.message); }
+  };
+  const pay = async (s) => {
+    const ref = window.prompt("To'lov ma'lumotnomasi (reference, ixtiyoriy):", '');
+    if (ref === null) return;
+    try {
+      await api.post(`/payout-statements/${s.id}/pay`, ref.trim() ? { reference: ref.trim() } : {});
+      load();
+    } catch (e) { window.alert(e.message); }
+  };
+
+  const list = rows || [];
+  const columns = [
+    { key: 'id', label: 'ID', render: (s) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{s.id}</span> },
+    { key: 'host', label: 'Mezbon', render: (s) => <PersonCell name={s.host?.name || '—'} sub={s.host?.org} hue={s.host?.hue} /> },
+    { key: 'gross', label: 'Yalpi', align: 'right', render: (s) => <MoneyCell n={s.gross} /> },
+    { key: 'fee', label: 'Komissiya', align: 'right', render: (s) => (
+      <div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{window.fmtSom(s.commission)}</div>
+        <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1, whiteSpace: 'nowrap' }}>+ {window.fmtSom(s.hostFee)} xizmat haqi</div>
+      </div>
+    ) },
+    { key: 'net', label: 'Sof', align: 'right', render: (s) => (
+      <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{window.fmtSom(s.net)} <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>so'm</span></div>
+    ) },
+    { key: 'status', label: window.AT.status, render: (s) => <StatusPill s={s.status} dict={window.STATEMENT_STATUS} /> },
+    { key: 'act', label: '', align: 'right', render: (s) => (
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+        {role === 'platform' && s.status === 'draft' && <Btn kind="soft" sm onClick={() => approve(s)}><IconCheck2 size={14} /> Tasdiqlash</Btn>}
+        {role === 'platform' && s.status === 'approved' && <Btn kind="primary" sm onClick={() => pay(s)}><IconCard size={14} /> To'lash</Btn>}
+        <IconBtn title={window.AT.view} onClick={() => setDetailId(s.id)}><IconEye size={16} /></IconBtn>
+      </div>
+    ) },
+  ];
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <SectionHead
+        title="Hisobotlar (payout)"
+        sub="Davr bo'yicha mezbon hisobotlari — yalpi, komissiya va sof to'lov"
+        right={(
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input className="adm-input" type="month" style={{ width: 150 }} value={period} onChange={(e) => setPeriod(e.target.value)} />
+            {role === 'platform' && (
+              <Btn kind="primary" sm onClick={generate} disabled={busy}><IconRefresh size={14} /> {busy ? 'Hisoblanmoqda…' : 'Hisoblash'}</Btn>
+            )}
+          </div>
+        )}
+      />
+      <DataTable columns={columns} rows={list} rowKey={(r) => r.id} onRow={(s) => setDetailId(s.id)}
+        empty={rows ? "Bu davr uchun hisobotlar yo'q" : 'Yuklanmoqda…'} />
+      <StatementDetailDrawer s={list.find((x) => x.id === detailId) || null} role={role}
+        onClose={() => setDetailId(null)} onApprove={approve} onPay={pay} />
+    </div>
+  );
+}
+
+Object.assign(window, {
+  GoModal, PaymentForm, ChargeForm, BookingMoneySections, DebtorsScreen,
+  ContractsScreen, ContractDetailDrawer, ContractRenewModal,
+  PayoutStatementsPanel, StatementDetailDrawer,
+});
 
 // ============================================================
 // src/admin-settings.jsx
@@ -4043,7 +5380,7 @@ function AuditTab() {
     const d = new Date(iso);
     return d.toLocaleDateString('uz-UZ') + ' ' + d.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
   };
-  const entities = ['all', 'products', 'bookings', 'hosts', 'reviews', 'users', 'settings', 'integrations', 'notifications'];
+  const entities = ['all', 'buildings', 'products', 'units', 'bookings', 'hosts', 'reviews', 'users', 'settings', 'integrations', 'notifications'];
 
   const columns = [
     { key: 'at', label: 'Vaqt', render: (r) => <span style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>{fmtTime(r.at)}</span> },
@@ -4143,10 +5480,12 @@ const ADMIN_BRAND_PRESETS = {
 
 const SECTION_META = {
   overview:  { title: () => window.AT.navOverview,  sub: () => "Bugungi ko'rsatkichlar · 03.06.2026" },
-  products:  { title: () => window.AT.navProducts,  sub: () => `${window.PRODUCTS.length} ta ob'ekt · 4 toifa` },
+  products:  { title: () => window.AT.navProducts,  sub: () => `${window.PRODUCTS.length} ta katalog mahsuloti · 4 toifa` },
   bookings:  { title: () => window.AT.navBookings,  sub: () => `${window.BOOKINGS.length} ta bandlov` },
+  contracts: { title: () => "Shartnomalar", sub: () => "Ijara shartnomalari · uzaytirish va bekor qilish" },
+  debtors:   { title: () => "Qarzdorlik", sub: () => `${((window.DEBTORS || {}).totals || {}).debtorCount || 0} ta qarzdor mijoz` },
   hosts:     { title: () => window.AT.navHosts,     sub: () => `${window.HOSTS.length} ta mezbon` },
-  customers: { title: () => window.AT.navCustomers, sub: () => "Mijozlar bazasi va segmentlar" },
+  buildings: { title: () => window.AT.navBuildings, sub: () => `${(window.BUILDINGS || []).length} ta bino` },
   companies: { title: () => "Kompaniyalar", sub: () => `${(window.COMPANIES || []).length} ta ijarachi kompaniya` },
   revenue:   { title: () => "Daromad va to'lovlar", sub: () => "Aylanma, komissiya va mezbon to'lovlari" },
   invoices:  { title: () => "Hisob-fakturalar", sub: () => "Oylik ESF hisob-fakturalari · didox.uz" },
@@ -4160,7 +5499,7 @@ function AdminApp() {
 
   // Section ↔ URL sync. Keeps the URL in sync with navigation so refresh and
   // back/forward work, and sections are bookmarkable/shareable.
-  const SECTIONS = ['overview','products','bookings','hosts','customers','companies','revenue','invoices','reviews','settings'];
+  const SECTIONS = ['overview','buildings','products','bookings','contracts','debtors','hosts','companies','revenue','invoices','reviews','settings'];
   const routeFromPath = () => {
     const parts = window.location.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
     const section = SECTIONS.includes(parts[0]) ? parts[0] : 'overview';
@@ -4230,8 +5569,11 @@ function AdminApp() {
     document.head.appendChild(s);
   }, []);
 
-  const counts = {
-    pendingProducts: window.PRODUCTS.filter((p) => p.status === 'pending').length,
+  // Server-computed pending counts (overview.counts); computed fallback pre-refresh.
+  const counts = window.COUNTS || {
+    pendingBuildings: (window.BUILDINGS || []).filter((b) => b.status === 'pending').length,
+    // pendingProducts = pending OFFERINGS (a building's pending product listing).
+    pendingProducts: (window.BUILDINGS || []).reduce((n, b) => n + (b.offerings || []).filter((o) => o.status === 'pending').length, 0),
     pendingBookings: window.BOOKINGS.filter((b) => b.status === 'pending').length,
     pendingReviews: window.REVIEWS.filter((r) => r.state === 'flagged' || r.state === 'pending').length,
   };
@@ -4256,9 +5598,11 @@ function AdminApp() {
         if (route.sub === 'add') return <HostForm host={null} onClose={() => setRoute({ section: 'hosts' })} onSave={() => setRoute({ section: 'hosts' })} />;
         if (route.sub === 'edit') return <HostForm host={window.HOSTS.find((h) => h.id === route.id) || null} onClose={() => setRoute({ section: 'hosts' })} onSave={() => setRoute({ section: 'hosts' })} />;
         return <HostsScreen search={search} route={route} setRoute={setRoute} />;
-      case 'customers': return <CustomersScreen search={search} />;
+      case 'buildings': return <BuildingsScreen search={search} role={role} />;
+      case 'contracts': return <ContractsScreen search={search} />;
+      case 'debtors':   return <DebtorsScreen search={search} />;
       case 'companies': return <CompaniesScreen search={search} />;
-      case 'revenue':   return <RevenueScreen search={search} />;
+      case 'revenue':   return <RevenueScreen search={search} role={role} />;
       case 'invoices':  return <InvoicesScreen search={search} />;
       case 'reviews':   return <ReviewsScreen search={search} />;
       case 'settings':  return <SettingsScreen />;
@@ -4273,7 +5617,7 @@ function AdminApp() {
     : isBookingsSub || isHostsSub
     ? null
     : route.section === 'products'
-    ? <Btn kind="primary" sm onClick={() => setFormOpen({ product: null })}><IconPlus size={15} /> {window.AT.addProduct}</Btn>
+    ? (role === 'platform' ? <Btn kind="primary" sm onClick={() => setFormOpen({ product: null })}><IconPlus size={15} /> {window.AT.addProduct}</Btn> : null)
     : route.section === 'bookings'
     ? <Btn kind="primary" sm onClick={() => setRoute({ section: 'bookings', sub: 'add' })}><IconPlus size={15} /> Bandlov qo'shish</Btn>
     : route.section === 'hosts'
@@ -4353,7 +5697,7 @@ function LightSidebar(props) {
 }
 
 function SidebarLightInner({ route, setRoute, role, counts }) {
-  const badge = { products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews };
+  const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
   return (
     <div style={{ width: 244, flexShrink: 0, background: 'var(--g-card)', borderRight: '1px solid var(--g-line)', display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ padding: '20px 18px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>

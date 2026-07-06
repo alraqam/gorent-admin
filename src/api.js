@@ -109,9 +109,12 @@ function logout() {
 // Load all datasets the dashboard renders, then publish onto window globals.
 async function bootstrap() {
   const role = currentUser()?.role;
-  const [overview, products, hosts, bookings, reviews, notifs, settings, integrations] = await Promise.all([
+  const [overview, meta, buildings, products, units, hosts, bookings, reviews, notifs, settings, integrations] = await Promise.all([
     get('/overview'),
+    get('/meta').catch(() => null),
+    get('/buildings'),
     get('/products'),
+    get('/units'),
     get('/hosts'),
     get('/bookings'),
     get('/reviews'),
@@ -122,6 +125,7 @@ async function bootstrap() {
 
   window.SETTINGS = settings;
   window.INTEGRATIONS = integrations;
+  window.META = meta;
 
   // Payouts, invoices and companies are platform-only — skip for host accounts.
   let payouts = [];
@@ -133,7 +137,17 @@ async function bootstrap() {
     try { companies = await get('/companies'); } catch { companies = []; }
   }
 
-  window.PRODUCTS = products;
+  // Receivables snapshot for the Qarzdorlik screen + nav badge. Host-scoped
+  // server-side, so both platform and host accounts fetch it.
+  try {
+    window.DEBTORS = await get('/debtors');
+  } catch {
+    window.DEBTORS = { totals: { outstanding: 0, prepaid: 0, debtorCount: 0 }, rows: [] };
+  }
+
+  window.BUILDINGS = buildings;   // each includes offerings: [{product, units, price, status}]
+  window.PRODUCTS = products;     // global catalog — each includes offerings + building
+  window.UNITS = units;           // each includes offering (product+building) + effectivePrice
   window.HOSTS = hosts;
   window.BOOKINGS = bookings;
   window.REVIEWS = reviews;
@@ -143,6 +157,7 @@ async function bootstrap() {
   window.NOTIFS = notifs;
 
   window.KPIS = overview.kpis;
+  window.COUNTS = overview.counts || null;
   window.revenueSeries = overview.revenueSeries;
   window.bookingsSeries = overview.bookingsSeries;
   window.byCategory = overview.byCategory;
