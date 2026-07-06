@@ -109,13 +109,12 @@ function logout() {
 // Load all datasets the dashboard renders, then publish onto window globals.
 async function bootstrap() {
   const role = currentUser()?.role;
-  const [overview, meta, buildings, products, units, hosts, bookings, reviews, notifs, settings, integrations] = await Promise.all([
+  const [overview, meta, buildings, products, units, bookings, reviews, notifs, settings, integrations] = await Promise.all([
     get('/overview'),
     get('/meta').catch(() => null),
     get('/buildings'),
     get('/products'),
     get('/units'),
-    get('/hosts'),
     get('/bookings'),
     get('/reviews'),
     get('/notifications'),
@@ -127,11 +126,14 @@ async function bootstrap() {
   window.INTEGRATIONS = integrations;
   window.META = meta;
 
-  // Payouts, invoices and companies are platform-only — skip for host accounts.
+  // Hosts directory, payouts, invoices and companies are platform-only —
+  // a 403 here must never break the host account's bootstrap.
+  let hosts = [];
   let payouts = [];
   let invoices = [];
   let companies = [];
   if (role === 'platform') {
+    try { hosts = await get('/hosts'); } catch { hosts = []; }
     try { payouts = await get('/payouts'); } catch { payouts = []; }
     try { invoices = await get('/invoices'); } catch { invoices = []; }
     try { companies = await get('/companies'); } catch { companies = []; }
