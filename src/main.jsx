@@ -1111,7 +1111,7 @@ const KPIS = [];
 // ─── Formatters ─────────────────────────────────────────────
 function fmtCompactSom(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(2).replace('.', ',') + " mlrd";
-  if (n >= 1e6) return (n / 1e6).toFixed(0) + " mln";
+  if (n >= 1e6) return parseFloat((n / 1e6).toFixed(1)) + " mln";
   if (n >= 1e3) return (n / 1e3).toFixed(0) + " ming";
   return String(n);
 }
