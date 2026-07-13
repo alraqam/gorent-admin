@@ -2869,9 +2869,16 @@ function BookingForm({ booking, onClose, onSave }) {
               <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Birlik va muddat</div>
               <div style={{ marginBottom: 14 }}>
                 <Label>Birlik</Label>
-                <select className="adm-select" style={{ width: '100%' }} value={f.unitId} onChange={(e) => set('unitId', e.target.value)}>
-                  {units.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
-                </select>
+                {units.length === 0 ? (
+                  <div style={{ padding: '12px 14px', borderRadius: 10, background: 'oklch(0.97 0.02 70)', border: '1px solid oklch(0.88 0.06 70)', font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.45 0.1 70)' }}>
+                    Hozircha birliklar yo'q. Avval <b>Binolar</b> bo'limida bino yarating, so'ng uning ichida
+                    <b> «Taklif qo'shish»</b> orqali katalogdan mahsulot tanlab, narx belgilang — birlik avtomatik yaratiladi.
+                  </div>
+                ) : (
+                  <select className="adm-select" style={{ width: '100%' }} value={f.unitId} onChange={(e) => set('unitId', e.target.value)}>
+                    {units.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
+                  </select>
+                )}
               </div>
 
               {period === 'month' ? (
