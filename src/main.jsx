@@ -1117,7 +1117,16 @@ function fmtCompactSom(n) {
 }
 function fmtSomFull(n) { return window.fmtSom(n) + " so'm"; }
 
-Object.assign(window, { NOTIFS });
+// A tenant is a legal entity (INN) or an individual / YaTT (PINFL). One place
+// that decides the buyer's tax label so tables, dropdowns, invoices and the
+// contract doc all read the same.
+function taxLabel(c) {
+  if (!c) return '';
+  if (c.type === 'individual') return c.pinfl ? `PINFL ${c.pinfl}` : '';
+  return c.inn ? `INN ${c.inn}` : (c.pinfl ? `PINFL ${c.pinfl}` : '');
+}
+
+Object.assign(window, { NOTIFS, taxLabel });
 
 Object.assign(window, {
   AT, PRODUCT_STATUS, BOOKING_STATUS, PAYOUT_STATUS, CAT_META,
@@ -2662,7 +2671,7 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
           <Avatar name={b.customer} size={42} hue={nameHue(b.customer)} />
           <div style={{ flex: 1 }}>
             <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.customer}</div>
-            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.companyRef?.name ? `${b.companyRef.name} (INN ${b.companyRef.inn}) · ` : ''}+{b.phone}</div>
+            <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{b.companyRef?.name ? `${b.companyRef.name}${window.taxLabel(b.companyRef) ? ` (${window.taxLabel(b.companyRef)})` : ''} · ` : ''}+{b.phone}</div>
           </div>
           <IconBtn title="Xabar" style={{ border: '1px solid var(--g-line)' }}><IconMessage size={16} /></IconBtn>
           <IconBtn title={`+${b.phone}`} onClick={() => window.open(`tel:+${b.phone}`)} style={{ border: '1px solid var(--g-line)' }}><IconPhone size={16} /></IconBtn>
@@ -2726,8 +2735,55 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
   );
 }
 
-// New-booking form. Month-period units take a company (required) + months;
-// hour/day units take start/end with an availability preview for the day.
+// Monthly lease term, mirrored from the API's src/common/term.ts so the form
+// previews exactly what the backend will bill. A term may end mid-month; the
+// final month is charged pro-rata by days.
+function addMonthsClamped(d, months) {
+  const r = new Date(d);
+  const day = r.getDate();
+  r.setDate(1);
+  r.setMonth(r.getMonth() + months);
+  const lastDay = new Date(r.getFullYear(), r.getMonth() + 1, 0).getDate();
+  r.setDate(Math.min(day, lastDay));
+  return r;
+}
+function daysBetween(a, b) {
+  const midnight = (d) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.round((midnight(b) - midnight(a)) / 86400000);
+}
+function monthlyTerm(start, end, monthlyPrice, qty = 1) {
+  if (!start || !end || !(end > start)) return null;
+  const monthly = monthlyPrice * qty;
+  let cursor = new Date(start);
+  let months = 0;
+  let total = 0;
+  for (;;) {
+    const next = addMonthsClamped(start, months + 1);
+    if (next > end) break;
+    total += monthly;
+    cursor = next;
+    months++;
+  }
+  const tailDays = daysBetween(cursor, end);
+  let tail = null;
+  if (tailDays > 0) {
+    const daysInMonth = daysBetween(cursor, addMonthsClamped(cursor, 1));
+    const amount = Math.round((monthly * tailDays) / daysInMonth);
+    tail = { days: tailDays, daysInMonth, amount };
+    total += amount;
+  }
+  return { months, tailDays, tail, total };
+}
+function termLabelUz(months, tailDays) {
+  const parts = [];
+  if (months > 0) parts.push(`${months} oy`);
+  if (tailDays > 0) parts.push(`${tailDays} kun`);
+  return parts.length ? parts.join(' ') : '0 kun';
+}
+
+// New-booking form. Month-period units take a company (required) + an end date
+// (the term may end mid-month, billed pro-rata); hour/day units take start/end
+// with an availability preview for the day.
 // Edits only touch customer / phone / company (PATCH contract).
 function BookingForm({ booking, onClose, onSave }) {
   const isEdit = !!booking;
@@ -2775,25 +2831,32 @@ function BookingForm({ booking, onClose, onSave }) {
     : (f.date ? new Date(`${f.date}T00:00:00`) : null);
   const endDt = period === 'hour'
     ? (f.date && f.endTime ? new Date(`${f.date}T${f.endTime}`) : null)
-    : period === 'day'
+    : (period === 'day' || period === 'month')
     ? (f.endDate ? new Date(`${f.endDate}T00:00:00`) : null)
     : null;
-  let spanCount = 0;
   let spanLabel = '';
+  let total = 0;
+  // For monthly leases the term schedule (whole months + pro-rata tail) is the
+  // source of truth; hourly/daily stay a flat count × price.
+  const term = period === 'month' && unit && startDt && endDt
+    ? monthlyTerm(startDt, endDt, unitPrice(unit), Number(f.qty) || 1)
+    : null;
   if (period === 'month') {
-    spanCount = Number(f.months) || 0;
-    spanLabel = `${spanCount} oy`;
+    if (term) {
+      spanLabel = termLabelUz(term.months, term.tailDays);
+      total = term.total;
+    }
   } else if (startDt && endDt && endDt > startDt) {
     const ms = endDt.getTime() - startDt.getTime();
-    spanCount = period === 'hour' ? Math.ceil(ms / 3600000) : Math.max(1, Math.ceil(ms / 86400000));
+    const spanCount = period === 'hour' ? Math.ceil(ms / 3600000) : Math.max(1, Math.ceil(ms / 86400000));
     spanLabel = `${spanCount} ${window.periodLabel(period)}`;
+    total = unit ? unitPrice(unit) * spanCount * (Number(f.qty) || 1) : 0;
   }
-  const total = unit ? unitPrice(unit) * spanCount * (Number(f.qty) || 1) : 0;
 
   const canSubmit = isEdit
     ? !!f.customer.trim()
     : !!(f.customer.trim() && unit && startDt
-        && (period === 'month' ? (Number(f.months) > 0 && f.companyId) : (endDt && endDt > startDt)));
+        && (period === 'month' ? (term && f.companyId) : (endDt && endDt > startDt)));
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -2806,7 +2869,7 @@ function BookingForm({ booking, onClose, onSave }) {
       } else if (period === 'month') {
         await api.post('/bookings', {
           unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
-          companyId: f.companyId, months: Number(f.months), start: startDt.toISOString(), qty: Number(f.qty) || 1,
+          companyId: f.companyId, start: startDt.toISOString(), end: endDt.toISOString(), qty: Number(f.qty) || 1,
         });
       } else {
         await api.post('/bookings', {
@@ -2854,7 +2917,7 @@ function BookingForm({ booking, onClose, onSave }) {
               <Label>Kompaniya (ijarachi){!isEdit && period === 'month' ? ' — majburiy' : ''}</Label>
               <select className="adm-select" style={{ width: '100%' }} value={f.companyId} onChange={(e) => set('companyId', e.target.value)}>
                 <option value="">— Tanlanmagan —</option>
-                {companies.map((c) => <option key={c.id} value={c.id}>{c.name} · INN {c.inn}</option>)}
+                {companies.map((c) => <option key={c.id} value={c.id}>{c.name} · {window.taxLabel(c)}</option>)}
               </select>
               {!isEdit && period === 'month' && !f.companyId && (
                 <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.14 70)' }}>
@@ -2882,20 +2945,41 @@ function BookingForm({ booking, onClose, onSave }) {
               </div>
 
               {period === 'month' ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
-                  <div>
-                    <Label>Boshlanish sanasi</Label>
-                    <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                    <div>
+                      <Label>Boshlanish sanasi</Label>
+                      <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Tugash sanasi</Label>
+                      <input className="adm-input" type="date" min={f.date || undefined} value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Soni</Label>
+                      <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                    </div>
                   </div>
-                  <div>
-                    <Label>Muddat (oy)</Label>
-                    <input className="adm-input" type="number" min={1} max={24} value={f.months} onChange={(e) => set('months', e.target.value)} />
-                  </div>
-                  <div>
-                    <Label>Soni</Label>
-                    <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
-                  </div>
-                </div>
+                  {/* Term preview: whole months + pro-rata tail (matches the API). */}
+                  {term && (
+                    <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 10, background: 'var(--g-bg)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+                        <span>Muddat</span><span>{termLabelUz(term.months, term.tailDays)}</span>
+                      </div>
+                      {term.tail && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+                          <span>Oxirgi oy (to'liq emas)</span>
+                          <span>{term.tail.days}/{term.tail.daysInMonth} kun · {window.fmtSom(term.tail.amount)} so'm</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {f.date && f.endDate && !term && (
+                    <div style={{ marginTop: 12, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+                      Tugash sanasi boshlanishdan keyin bo'lishi kerak.
+                    </div>
+                  )}
+                </>
               ) : period === 'hour' ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 14 }}>
                   <div>
@@ -2966,7 +3050,7 @@ function BookingForm({ booking, onClose, onSave }) {
                 <span>Narx</span>
                 <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{window.fmtCompactSom(unitPrice(unit))} so'm/{window.periodLabel(period)}</span>
               </div>
-              {!isEdit && spanCount > 0 && (
+              {!isEdit && total > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
                   <span>Jami ({spanLabel} × {Number(f.qty) || 1})</span>
                   <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(total)} so'm</span>
@@ -3753,16 +3837,19 @@ function CompaniesScreen({ search }) {
   let rows = window.COMPANIES || [];
   if (search) {
     const q = search.toLowerCase();
-    rows = rows.filter((c) => `${c.name} ${c.inn}`.toLowerCase().includes(q));
+    rows = rows.filter((c) => `${c.name} ${c.inn || ''} ${c.pinfl || ''}`.toLowerCase().includes(q));
   }
 
   if (editing) return <CompanyForm company={editing.id ? editing : null} onClose={() => setEditing(null)} />;
 
   const columns = [
-    { key: 'name', label: 'Kompaniya', render: (c) => (
+    { key: 'name', label: 'Ijarachi', render: (c) => (
       <div>
-        <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{c.name}</div>
-        <div style={{ font: `400 12px ui-monospace, monospace`, color: 'var(--g-ink-4)' }}>INN {c.inn}</div>
+        <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', display: 'flex', alignItems: 'center', gap: 7 }}>
+          {c.name}
+          {c.type === 'individual' && <span style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.5 0.1 200)', background: 'oklch(0.95 0.03 200)', padding: '1px 6px', borderRadius: 5 }}>YaTT</span>}
+        </div>
+        <div style={{ font: `400 12px ui-monospace, monospace`, color: 'var(--g-ink-4)' }}>{window.taxLabel(c) || '—'}</div>
       </div>
     ) },
     { key: 'phones', label: 'Telefon', render: (c) => <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{(c.phones || []).join(', ') || '—'}</span> },
@@ -3784,10 +3871,10 @@ function CompaniesScreen({ search }) {
 function CompanyForm({ company, onClose }) {
   const isEdit = !!company;
   const [f, setF] = React.useState(() => company ? {
-    name: company.name, inn: company.inn,
+    name: company.name, type: company.type || 'business', inn: company.inn || '', pinfl: company.pinfl || '',
     phones: company.phones?.length ? company.phones : [''],
     directorPassport: company.directorPassport || '', guvohnoma: company.guvohnoma || '',
-  } : { name: '', inn: '', phones: [''], directorPassport: '', guvohnoma: '' });
+  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '' });
   const [files, setFiles] = React.useState({ passport: null, guvohnoma: null });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -3797,12 +3884,18 @@ function CompanyForm({ company, onClose }) {
   const addPhone = () => setF((s) => ({ ...s, phones: [...s.phones, ''] }));
   const removePhone = (i) => setF((s) => ({ ...s, phones: s.phones.length > 1 ? s.phones.filter((_, idx) => idx !== i) : s.phones }));
 
+  const isIndividual = f.type === 'individual';
   const submit = async () => {
-    if (!f.name.trim() || !/^\d{9}$/.test(f.inn)) { window.alert('Kompaniya nomi va 9 xonali INN talab qilinadi'); return; }
+    if (!f.name.trim()) { window.alert('Ijarachi nomi talab qilinadi'); return; }
+    if (isIndividual ? !/^\d{14}$/.test(f.pinfl) : !/^\d{9}$/.test(f.inn)) {
+      window.alert(isIndividual ? '14 xonali PINFL talab qilinadi' : '9 xonali INN talab qilinadi');
+      return;
+    }
     setBusy(true);
     try {
       const payload = {
-        name: f.name.trim(), inn: f.inn,
+        name: f.name.trim(), type: f.type,
+        ...(isIndividual ? { pinfl: f.pinfl } : { inn: f.inn }),
         phones: f.phones.map((p) => p.trim()).filter(Boolean),
         directorPassport: f.directorPassport.trim() || null,
         guvohnoma: f.guvohnoma.trim() || null,
@@ -3855,15 +3948,41 @@ function CompanyForm({ company, onClose }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         <Card>
           <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>{isEdit ? 'Kompaniyani tahrirlash' : 'Yangi kompaniya'}</div>
+          <div style={{ marginBottom: 14 }}>
+            <Label>Ijarachi turi</Label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[
+                ['business', 'Yuridik shaxs', 'INN'],
+                ['individual', 'Jismoniy shaxs / YaTT', 'PINFL'],
+              ].map(([val, label, tag]) => (
+                <button key={val} type="button" onClick={() => set('type', val)}
+                  style={{
+                    flex: 1, padding: '10px 12px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                    border: `1.5px solid ${f.type === val ? 'var(--g-brand)' : 'var(--g-line)'}`,
+                    background: f.type === val ? 'oklch(0.96 0.04 285)' : 'var(--g-surface)',
+                    font: `600 12.5px ${window.GO.font}`, color: f.type === val ? 'var(--g-brand)' : 'var(--g-ink-2)',
+                  }}>
+                  {label} <span style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>· {tag}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <div>
-              <Label>Kompaniya nomi</Label>
-              <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="Epam Systems" />
+              <Label>{isIndividual ? 'F.I.Sh. (ijarachi)' : 'Kompaniya nomi'}</Label>
+              <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder={isIndividual ? 'Bekzod Yusupov' : 'Epam Systems'} />
             </div>
-            <div>
-              <Label>INN (STIR)</Label>
-              <input className="adm-input" value={f.inn} onChange={(e) => set('inn', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
-            </div>
+            {isIndividual ? (
+              <div>
+                <Label>PINFL (JSHSHIR)</Label>
+                <input className="adm-input" value={f.pinfl} onChange={(e) => set('pinfl', e.target.value.replace(/\D/g, '').slice(0, 14))} placeholder="30112197450012" />
+              </div>
+            ) : (
+              <div>
+                <Label>INN (STIR)</Label>
+                <input className="adm-input" value={f.inn} onChange={(e) => set('inn', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
+              </div>
+            )}
           </div>
         </Card>
 
@@ -4084,7 +4203,7 @@ function InvoicesScreen({ search }) {
                   <tr key={r.bookingId} style={{ borderBottom: i < preview.rows.length - 1 ? '1px solid var(--g-line)' : 0 }}>
                     <td style={{ padding: '11px 16px' }}>
                       <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{r.company?.name || r.customer}</div>
-                      <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.customer}{r.company?.inn ? ` · INN ${r.company.inn}` : ''} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</span></div>
+                      <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.customer}{r.company && window.taxLabel(r.company) ? ` · ${window.taxLabel(r.company)}` : ''} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</span></div>
                     </td>
                     <td style={{ padding: '11px 16px', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{r.building} · {r.unit}</td>
                     <td style={{ padding: '11px 16px', textAlign: 'right', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{window.fmtSom(r.rent)}</td>
@@ -4711,7 +4830,7 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{bk.companyRef?.name || bk.customer}</div>
             <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-              {bk.companyRef?.inn ? `INN ${bk.companyRef.inn} · ` : ''}{bk.customer}{bk.phone ? ` · +${bk.phone}` : ''}
+              {bk.companyRef && window.taxLabel(bk.companyRef) ? `${window.taxLabel(bk.companyRef)} · ` : ''}{bk.customer}{bk.phone ? ` · +${bk.phone}` : ''}
             </div>
           </div>
         </div>
