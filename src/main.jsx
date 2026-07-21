@@ -1081,10 +1081,23 @@ function fmtTimeHM(iso) {
 // Deterministic avatar hue from a name (the API no longer sends a hue per customer).
 function nameHue(name) { return (String(name || '?').charCodeAt(0) * 137) % 360; }
 // "01.07.2026 – 01.08.2026" / hourly: "04.07.2026 · 10:00–12:00"
+// Monthly lease ends are stored as the exclusive boundary (day after the last
+// day of occupancy), so the last day the tenant actually holds the unit is
+// end − 1. Daily/hourly ends already fall on the right calendar day.
+function endMinusDay(iso) {
+  if (!iso) return iso;
+  const d = new Date(iso);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString();
+}
+function bookingEndDisplay(b) {
+  const period = b.unit?.offering?.product?.period;
+  return period === 'month' && b.end ? endMinusDay(b.end) : b.end;
+}
 function fmtBookingRange(b) {
   const period = b.unit?.offering?.product?.period;
   if (period === 'hour') return `${fmtDate(b.start)} · ${fmtTimeHM(b.start)}–${fmtTimeHM(b.end)}`;
-  return `${fmtDate(b.start)} – ${fmtDate(b.end)}`;
+  return `${fmtDate(b.start)} – ${fmtDate(bookingEndDisplay(b))}`;
 }
 
 // ─── Initial datasets — replaced by api.bootstrap() before render ──
@@ -2681,7 +2694,7 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
           {[
             ['Boshlanish', isHourly ? `${fmtDate(b.start)} ${fmtTimeHM(b.start)}` : fmtDate(b.start)],
-            ['Tugash', isHourly ? `${fmtDate(b.end)} ${fmtTimeHM(b.end)}` : fmtDate(b.end)],
+            ['Tugash', isHourly ? `${fmtDate(b.end)} ${fmtTimeHM(b.end)}` : fmtDate(bookingEndDisplay(b))],
             ['Muddat', b.months ? `${b.months} oy` : fmtBookingRange(b)],
             ['Narx', `${window.fmtCompactSom(price)} so'm/${window.periodLabel(period)} × ${b.qty || 1}`],
           ].map(([k, v]) => (
@@ -2781,6 +2794,34 @@ function termLabelUz(months, tailDays) {
   return parts.length ? parts.join(' ') : '0 kun';
 }
 
+// Quantity (Soni) only makes sense for fungible, countable inventory —
+// hot-desks and virtual-office packages, where you can take several at once.
+// Space rented by area (private rooms, meeting/conference rooms) is a single
+// unit, so Soni is hidden and quantity is always 1.
+function isCountableUnit(type) {
+  return type === 'desk' || type === 'virtual_office';
+}
+
+// Monthly lease dates are pure calendar dates — parse them at UTC midnight so
+// the server (which runs UTC) reads the same day the operator picked. Sending
+// a LOCAL-midnight date shifts it back ~5h in UTC+5 and the container would
+// bill the wrong month.
+function utcMidnight(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+function addUTCDays(dt, n) {
+  const r = new Date(dt);
+  r.setUTCDate(r.getUTCDate() + n);
+  return r;
+}
+// The picked monthly end date is the LAST day of the lease (inclusive), so the
+// exclusive boundary the term schedule needs is the day after. This makes
+// 01.07 → 31.07 exactly one full month, not a 30/31 pro-rata stub.
+function monthlyEndExclusive(ymd) {
+  return addUTCDays(utcMidnight(ymd), 1);
+}
+
 // New-booking form. Month-period units take a company (required) + an end date
 // (the term may end mid-month, billed pro-rata); hour/day units take start/end
 // with an availability preview for the day.
@@ -2807,6 +2848,9 @@ function BookingForm({ booking, onClose, onSave }) {
   const period = (unit && unit.offering?.product?.period) || 'month';
   // GET /units returns effectivePrice (unit.price ?? offering.price).
   const unitPrice = (u) => u.effectivePrice ?? u.price ?? u.offering?.price ?? 0;
+  // Soni is shown only for countable units; area-priced spaces are always qty 1.
+  const showQty = isCountableUnit(unit?.offering?.product?.type);
+  const effectiveQty = showQty ? (Number(f.qty) || 1) : 1;
 
   // Hosts don't get companies preloaded — fetch on demand for the select.
   React.useEffect(() => {
@@ -2831,15 +2875,22 @@ function BookingForm({ booking, onClose, onSave }) {
     : (f.date ? new Date(`${f.date}T00:00:00`) : null);
   const endDt = period === 'hour'
     ? (f.date && f.endTime ? new Date(`${f.date}T${f.endTime}`) : null)
-    : (period === 'day' || period === 'month')
-    ? (f.endDate ? new Date(`${f.endDate}T00:00:00`) : null)
+    // Daily: the end date is the last day used, so bill through end-of-day
+    // (01.07 → 31.07 = 31 days, not 30).
+    : period === 'day'
+    ? (f.endDate ? new Date(`${f.endDate}T23:59:59.999`) : null)
     : null;
+  // Monthly: UTC-midnight start + exclusive end boundary (last day + 1). These
+  // are what get sent AND previewed, so the operator sees exactly what the
+  // server will bill.
+  const mStart = period === 'month' && f.date ? utcMidnight(f.date) : null;
+  const mEndExcl = period === 'month' && f.endDate ? monthlyEndExclusive(f.endDate) : null;
   let spanLabel = '';
   let total = 0;
   // For monthly leases the term schedule (whole months + pro-rata tail) is the
   // source of truth; hourly/daily stay a flat count × price.
-  const term = period === 'month' && unit && startDt && endDt
-    ? monthlyTerm(startDt, endDt, unitPrice(unit), Number(f.qty) || 1)
+  const term = period === 'month' && unit && mStart && mEndExcl && mEndExcl > mStart
+    ? monthlyTerm(mStart, mEndExcl, unitPrice(unit), effectiveQty)
     : null;
   if (period === 'month') {
     if (term) {
@@ -2850,7 +2901,7 @@ function BookingForm({ booking, onClose, onSave }) {
     const ms = endDt.getTime() - startDt.getTime();
     const spanCount = period === 'hour' ? Math.ceil(ms / 3600000) : Math.max(1, Math.ceil(ms / 86400000));
     spanLabel = `${spanCount} ${window.periodLabel(period)}`;
-    total = unit ? unitPrice(unit) * spanCount * (Number(f.qty) || 1) : 0;
+    total = unit ? unitPrice(unit) * spanCount * effectiveQty : 0;
   }
 
   const canSubmit = isEdit
@@ -2869,12 +2920,12 @@ function BookingForm({ booking, onClose, onSave }) {
       } else if (period === 'month') {
         await api.post('/bookings', {
           unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
-          companyId: f.companyId, start: startDt.toISOString(), end: endDt.toISOString(), qty: Number(f.qty) || 1,
+          companyId: f.companyId, start: mStart.toISOString(), end: mEndExcl.toISOString(), qty: effectiveQty,
         });
       } else {
         await api.post('/bookings', {
           unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
-          start: startDt.toISOString(), end: endDt.toISOString(), qty: Number(f.qty) || 1,
+          start: startDt.toISOString(), end: endDt.toISOString(), qty: effectiveQty,
           ...(f.companyId ? { companyId: f.companyId } : {}),
         });
       }
@@ -2946,7 +2997,7 @@ function BookingForm({ booking, onClose, onSave }) {
 
               {period === 'month' ? (
                 <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr' : '1fr 1fr', gap: 14 }}>
                     <div>
                       <Label>Boshlanish sanasi</Label>
                       <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
@@ -2955,10 +3006,12 @@ function BookingForm({ booking, onClose, onSave }) {
                       <Label>Tugash sanasi</Label>
                       <input className="adm-input" type="date" min={f.date || undefined} value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
                     </div>
-                    <div>
-                      <Label>Soni</Label>
-                      <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
-                    </div>
+                    {showQty && (
+                      <div>
+                        <Label>Soni</Label>
+                        <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                      </div>
+                    )}
                   </div>
                   {/* Term preview: whole months + pro-rata tail (matches the API). */}
                   {term && (
@@ -2981,7 +3034,7 @@ function BookingForm({ booking, onClose, onSave }) {
                   )}
                 </>
               ) : period === 'hour' ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 14 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Sana</Label>
                     <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
@@ -2994,25 +3047,29 @@ function BookingForm({ booking, onClose, onSave }) {
                     <Label>Tugash</Label>
                     <input className="adm-input" type="time" value={f.endTime} onChange={(e) => set('endTime', e.target.value)} />
                   </div>
-                  <div>
-                    <Label>Soni</Label>
-                    <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
-                  </div>
+                  {showQty && (
+                    <div>
+                      <Label>Soni</Label>
+                      <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr' : '1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Boshlanish sanasi</Label>
                     <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
                   </div>
                   <div>
                     <Label>Tugash sanasi</Label>
-                    <input className="adm-input" type="date" value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
+                    <input className="adm-input" type="date" min={f.date || undefined} value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
                   </div>
-                  <div>
-                    <Label>Soni</Label>
-                    <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
-                  </div>
+                  {showQty && (
+                    <div>
+                      <Label>Soni</Label>
+                      <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -3052,7 +3109,7 @@ function BookingForm({ booking, onClose, onSave }) {
               </div>
               {!isEdit && total > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
-                  <span>Jami ({spanLabel} × {Number(f.qty) || 1})</span>
+                  <span>Jami ({spanLabel}{showQty ? ` × ${effectiveQty}` : ''})</span>
                   <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(total)} so'm</span>
                 </div>
               )}
@@ -4848,7 +4905,7 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
           {[
             ['Boshlanish', fmtDate(c.startsAt)],
-            ['Tugash', fmtDate(c.endsAt)],
+            ['Tugash', fmtDate(endMinusDay(c.endsAt))],
             ['Oylik ijara', `${window.fmtSom(monthly)} so'm`],
             ['Indeksatsiya', c.indexationPct != null ? `${c.indexationPct}%` : '—'],
           ].map(([k, v]) => (
@@ -4936,7 +4993,7 @@ function ContractsScreen({ search }) {
     ) },
     { key: 'period', label: 'Muddat', render: (c) => (
       <div>
-        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{fmtDate(c.startsAt)} – {fmtDate(c.endsAt)}</div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{fmtDate(c.startsAt)} – {fmtDate(endMinusDay(c.endsAt))}</div>
         {(c.derivedStatus || c.status) === 'expiring' && (
           <div style={{ font: `600 11.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 2 }}>{c.daysLeft} kun qoldi</div>
         )}
