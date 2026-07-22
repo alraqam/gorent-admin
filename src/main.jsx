@@ -1055,6 +1055,7 @@ const UNIT_TYPES = {
   meeting_room:    { label: "Yig'ilish xonasi",              short: "Yig'ilish",    defaultPeriod: 'hour',  hue: 200 },
   conference_room: { label: "Konferensiya zali",             short: "Konferensiya", defaultPeriod: 'hour',  hue: 250 },
   desk:            { label: "Ish stoli (koworking)",         short: "Stol",         defaultPeriod: 'month', hue: 158 },
+  area:            { label: "Maydon (m²)",                   short: "Maydon",       defaultPeriod: 'month', hue: 95 },
 };
 const PERIOD_LABELS = { month: 'oy', day: 'kun', hour: 'soat' };
 function unitTypeMeta(type) {
@@ -2846,8 +2847,12 @@ function BookingForm({ booking, onClose, onSave }) {
   const units = window.UNITS || [];
   const unit = units.find((u) => u.id === f.unitId);
   const period = (unit && unit.offering?.product?.period) || 'month';
-  // GET /units returns effectivePrice (unit.price ?? offering.price).
+  // GET /units returns effectivePrice (unit.price ?? offering.price). For area
+  // units this is the per-m² rate.
   const unitPrice = (u) => u.effectivePrice ?? u.price ?? u.offering?.price ?? 0;
+  const isAreaUnit = (u) => u?.offering?.product?.type === 'area';
+  // The effective per-unit period rate: area units bill rate × m².
+  const rateFor = (u) => isAreaUnit(u) ? unitPrice(u) * (u.m2 || 0) : unitPrice(u);
   // Soni is shown only for countable units; area-priced spaces are always qty 1.
   const showQty = isCountableUnit(unit?.offering?.product?.type);
   const effectiveQty = showQty ? (Number(f.qty) || 1) : 1;
@@ -2890,7 +2895,7 @@ function BookingForm({ booking, onClose, onSave }) {
   // For monthly leases the term schedule (whole months + pro-rata tail) is the
   // source of truth; hourly/daily stay a flat count × price.
   const term = period === 'month' && unit && mStart && mEndExcl && mEndExcl > mStart
-    ? monthlyTerm(mStart, mEndExcl, unitPrice(unit), effectiveQty)
+    ? monthlyTerm(mStart, mEndExcl, rateFor(unit), effectiveQty)
     : null;
   if (period === 'month') {
     if (term) {
@@ -2901,7 +2906,7 @@ function BookingForm({ booking, onClose, onSave }) {
     const ms = endDt.getTime() - startDt.getTime();
     const spanCount = period === 'hour' ? Math.ceil(ms / 3600000) : Math.max(1, Math.ceil(ms / 86400000));
     spanLabel = `${spanCount} ${window.periodLabel(period)}`;
-    total = unit ? unitPrice(unit) * spanCount * effectiveQty : 0;
+    total = unit ? rateFor(unit) * spanCount * effectiveQty : 0;
   }
 
   const canSubmit = isEdit
@@ -3105,8 +3110,14 @@ function BookingForm({ booking, onClose, onSave }) {
               <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 8 }}>{unit.offering?.product?.name} · {unit.offering?.building?.name}</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
                 <span>Narx</span>
-                <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{window.fmtCompactSom(unitPrice(unit))} so'm/{window.periodLabel(period)}</span>
+                <span style={{ fontWeight: 700, color: 'var(--g-ink)' }}>{window.fmtCompactSom(unitPrice(unit))} so'm/{isAreaUnit(unit) ? 'm²/' : ''}{window.periodLabel(period)}</span>
               </div>
+              {isAreaUnit(unit) && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginTop: 6 }}>
+                  <span>Maydon</span>
+                  <span>{unit.m2 || 0} m² × {window.fmtCompactSom(unitPrice(unit))} = {window.fmtCompactSom(rateFor(unit))} so'm/{window.periodLabel(period)}</span>
+                </div>
+              )}
               {!isEdit && total > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
                   <span>Jami ({spanLabel}{showQty ? ` × ${effectiveQty}` : ''})</span>
