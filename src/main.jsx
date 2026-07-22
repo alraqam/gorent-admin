@@ -3460,7 +3460,11 @@ function BuildingsScreen({ search, role }) {
   const counts = { all: (window.BUILDINGS || []).length };
   Object.keys(window.PRODUCT_STATUS).forEach((k) => counts[k] = (window.BUILDINGS || []).filter((b) => b.status === k).length);
 
-  if (editing) return <BuildingForm building={editing.id ? editing : null} role={role} onClose={() => setEditing(null)} />;
+  if (editing) return <BuildingForm building={editing.id ? editing : null} role={role}
+    onClose={() => setEditing(null)}
+    // After creating, switch to editing the fresh building so its offerings
+    // (Takliflar) section becomes available immediately.
+    onCreated={(id) => setEditing((window.BUILDINGS || []).find((b) => b.id === id) || { id })} />;
 
   const columns = [
     { key: 'id', label: 'ID', render: (b) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{b.id}</span> },
@@ -3742,7 +3746,7 @@ function BuildingOfferings({ building, role }) {
   );
 }
 
-function BuildingForm({ building, role, onClose }) {
+function BuildingForm({ building, role, onClose, onCreated }) {
   const isEdit = !!building;
   const [f, setF] = React.useState(() => building ? {
     name: building.name, address: building.address || '', city: building.city || 'Toshkent',
@@ -3784,7 +3788,9 @@ function BuildingForm({ building, role, onClose }) {
       const saved = isEdit ? await api.patch(`/buildings/${building.id}`, payload) : await api.post('/buildings', payload);
       if (kadastrFile) await api.upload(`/buildings/${saved.id}/kadastr`, kadastrFile);
       if (window.__gorentRefresh) await window.__gorentRefresh();
-      onClose();
+      // On create, continue into edit mode so Takliflar can be added now.
+      if (!isEdit && onCreated) { setBusy(false); onCreated(saved.id); }
+      else onClose();
     } catch (e) { window.alert(e.message); setBusy(false); }
   };
 
