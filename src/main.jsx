@@ -1049,13 +1049,18 @@ function catName(id) { return (window.CATEGORIES.find((c) => c.id === id) || {})
 function catShort(id) { return (window.CATEGORIES.find((c) => c.id === id) || {}).short || id; }
 
 // ─── Unit types & periods (fallback if /meta is unavailable) ─
+// Fallback mirror of the API's UNIT_TYPES spec (window.META.unitTypes is the
+// live copy). fungible → Soni is real stock; priceBasis 'per_m2' → the price
+// is per square meter; m2/capacity say whether those fields apply
+// ('required' | 'optional' | 'hidden'). Virtual offices REQUIRE m² — the
+// yuridik-manzil lease must declare an area for ijara.soliq.uz registration.
 const UNIT_TYPES = {
-  virtual_office:  { label: "Virtual ofis (yuridik manzil)", short: "Virtual",      defaultPeriod: 'month', hue: 290 },
-  room:            { label: "Xona (shaxsiy ofis)",           short: "Xona",         defaultPeriod: 'month', hue: 24 },
-  meeting_room:    { label: "Yig'ilish xonasi",              short: "Yig'ilish",    defaultPeriod: 'hour',  hue: 200 },
-  conference_room: { label: "Konferensiya zali",             short: "Konferensiya", defaultPeriod: 'hour',  hue: 250 },
-  desk:            { label: "Ish stoli (koworking)",         short: "Stol",         defaultPeriod: 'month', hue: 158 },
-  area:            { label: "Maydon (m²)",                   short: "Maydon",       defaultPeriod: 'month', hue: 95 },
+  virtual_office:  { label: "Virtual ofis (yuridik manzil)", short: "Virtual",      defaultPeriod: 'month', hue: 290, fungible: true,  priceBasis: 'per_unit', m2: 'required', capacity: 'hidden' },
+  room:            { label: "Xona (shaxsiy ofis)",           short: "Xona",         defaultPeriod: 'month', hue: 24,  fungible: false, priceBasis: 'per_unit', m2: 'optional', capacity: 'optional' },
+  meeting_room:    { label: "Yig'ilish xonasi",              short: "Yig'ilish",    defaultPeriod: 'hour',  hue: 200, fungible: false, priceBasis: 'per_unit', m2: 'optional', capacity: 'optional' },
+  conference_room: { label: "Konferensiya zali",             short: "Konferensiya", defaultPeriod: 'hour',  hue: 250, fungible: false, priceBasis: 'per_unit', m2: 'optional', capacity: 'optional' },
+  desk:            { label: "Ish stoli (koworking)",         short: "Stol",         defaultPeriod: 'month', hue: 158, fungible: true,  priceBasis: 'per_unit', m2: 'hidden',   capacity: 'hidden' },
+  area:            { label: "Maydon (m²)",                   short: "Maydon",       defaultPeriod: 'month', hue: 95,  fungible: false, priceBasis: 'per_m2',   m2: 'required', capacity: 'optional' },
 };
 const PERIOD_LABELS = { month: 'oy', day: 'kun', hour: 'soat' };
 function unitTypeMeta(type) {
@@ -1063,6 +1068,11 @@ function unitTypeMeta(type) {
 }
 function periodLabel(period) {
   return ((window.META && window.META.periods) || PERIOD_LABELS)[period] || period;
+}
+// Honest price unit for a product: "so'm/oy", "so'm/m²/oy", "so'm/soat"…
+function priceUnitLabel(product) {
+  const spec = unitTypeMeta(product?.type);
+  return `so'm/${spec.priceBasis === 'per_m2' ? 'm²/' : ''}${periodLabel(product?.period || spec.defaultPeriod)}`;
 }
 
 // ─── Date/time & avatar-hue helpers ─────────────────────────
@@ -1149,7 +1159,7 @@ Object.assign(window, {
   MONTHS_UZ, revenueSeries, bookingsSeries, byCategory,
   KPIS, totalRevenue, totalBookings, activeBookings, avgOccupancy, pendingApproval, avgRating,
   fmtCompactSom, fmtSomFull,
-  UNIT_TYPES, PERIOD_LABELS, unitTypeMeta, periodLabel,
+  UNIT_TYPES, PERIOD_LABELS, unitTypeMeta, periodLabel, priceUnitLabel,
   fmtDate, fmtTimeHM, nameHue, fmtBookingRange,
 });
 
@@ -2308,22 +2318,28 @@ function ProductsScreen({ search, openForm, role }) {
 // ─── Unit add/edit inline form (per offering) ───────────────
 // Type/period come from the offering's catalog product; a unit only overrides
 // price — an empty price means "bino narxi" (inherits offering.price).
+// Fields shown per the type spec: Soni only for fungible stock, Sig'imi/m²
+// only where they mean something; m² is mandatory for virtual offices
+// (yuridik-manzil registration needs the declared area) and Maydon units
+// (it drives the per-m² price).
 function UnitEditor({ unit, offering, onDone }) {
   const isEdit = !!unit;
+  const spec = window.unitTypeMeta(offering?.product?.type);
   const [f, setF] = React.useState(() => unit ? {
-    name: unit.name, qty: unit.qty ?? 1, capacity: unit.capacity ?? '', m2: unit.m2 ?? '',
+    name: unit.name, qty: unit.qty ?? 1, capacity: unit.capacity ?? '', m2: unit.m2 || '',
     price: unit.price ?? '', status: unit.status || 'active',
   } : { name: '', qty: 1, capacity: '', m2: '', price: '', status: 'active' });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
 
+  const m2Missing = spec.m2 === 'required' && !(Number(f.m2) >= 1);
   const submit = async () => {
-    if (!String(f.name).trim()) return;
+    if (!String(f.name).trim() || m2Missing) return;
     setBusy(true);
     const payload = {
       name: String(f.name).trim(),
-      qty: Number(f.qty) || 1,
+      qty: spec.fungible ? (Number(f.qty) || 1) : 1,
       capacity: f.capacity === '' || f.capacity == null ? undefined : Number(f.capacity),
       m2: f.m2 === '' || f.m2 == null ? undefined : Number(f.m2),
       price: f.price === '' || f.price == null ? null : Number(f.price),
@@ -2336,36 +2352,53 @@ function UnitEditor({ unit, offering, onDone }) {
     if (ok) onDone();
   };
 
+  const showCapacity = spec.capacity !== 'hidden';
+  const showM2 = spec.m2 !== 'hidden';
   return (
     <div style={{ padding: 14, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)' }}>
       <div style={{ font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>{isEdit ? "Birlikni tahrirlash" : "Yangi birlik"} <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}>· {offering?.product?.name || ''}</span></div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: spec.fungible ? '1fr 1fr' : '1fr', gap: 10, marginBottom: 10 }}>
         <div>
           <Label>Nomi</Label>
           <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="7A xona" />
         </div>
-        <div>
-          <Label>Soni (zaxira)</Label>
-          <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
-        </div>
+        {spec.fungible && (
+          <div>
+            <Label>Soni (zaxira)</Label>
+            <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+          </div>
+        )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 10 }}>
-        <div>
-          <Label>Sig'imi (odam)</Label>
-          <input className="adm-input" type="number" value={f.capacity} onChange={(e) => set('capacity', e.target.value)} placeholder="4" />
+      {(showCapacity || showM2) && (
+        <div style={{ display: 'grid', gridTemplateColumns: showCapacity && showM2 ? 'repeat(2, 1fr)' : '1fr', gap: 10, marginBottom: 10 }}>
+          {showCapacity && (
+            <div>
+              <Label>Sig'imi (odam)</Label>
+              <input className="adm-input" type="number" value={f.capacity} onChange={(e) => set('capacity', e.target.value)} placeholder="4" />
+            </div>
+          )}
+          {showM2 && (
+            <div>
+              <Label>Maydoni (m²){spec.m2 === 'required' ? ' — majburiy' : ''}</Label>
+              <input className="adm-input" type="number" min={1} value={f.m2} onChange={(e) => set('m2', e.target.value)} placeholder="24" />
+              {spec.m2 === 'required' && (
+                <div style={{ font: `400 11px ${window.GO.font}`, color: m2Missing ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-4)', marginTop: 4 }}>
+                  {spec.priceBasis === 'per_m2'
+                    ? "Narx m² bo'yicha hisoblanadi."
+                    : "Yuridik manzil shartnomasi uchun maydon ko'rsatilishi shart (soliq ro'yxati)."}
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        <div>
-          <Label>Maydoni (m²)</Label>
-          <input className="adm-input" type="number" value={f.m2} onChange={(e) => set('m2', e.target.value)} placeholder="24" />
-        </div>
-      </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
-          <Label>Narx (so'm) — ixtiyoriy</Label>
+          <Label>Narx ({window.priceUnitLabel(offering?.product)}) — ixtiyoriy</Label>
           <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)}
             placeholder={offering?.price ? `Bino narxi: ${window.fmtSom(offering.price)}` : "Bino narxi"} />
           <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 4 }}>
-            Bo'sh qoldirilsa bino narxi qo'llanadi{offering?.price ? ` (${window.fmtSom(offering.price)} so'm)` : ''}.
+            Bo'sh qoldirilsa bino narxi qo'llanadi{offering?.price ? ` (${window.fmtSom(offering.price)} ${window.priceUnitLabel(offering?.product)})` : ''}.
           </div>
         </div>
         <div>
@@ -2377,7 +2410,7 @@ function UnitEditor({ unit, offering, onDone }) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Btn kind="ghost" sm onClick={onDone}>{window.AT.cancel}</Btn>
-        <Btn kind="primary" sm onClick={submit} disabled={busy || !String(f.name).trim()}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !String(f.name).trim() || m2Missing}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
       </div>
     </div>
   );
@@ -2449,7 +2482,7 @@ function ProductDetailDrawer({ p: pProp, role, onClose, onEdit }) {
                       <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{o.building?.district || ''}{o.building?.city ? `, ${o.building.city}` : ''} · {(o.units || []).length} ta birlik</div>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(o.price || 0)} so'm/{window.periodLabel(p.period)}</div>
+                      <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtCompactSom(o.price || 0)} {window.priceUnitLabel(p)}</div>
                       <div style={{ marginTop: 3 }}><StatusPill s={o.status} size="sm" /></div>
                     </div>
                   </div>
@@ -2797,10 +2830,10 @@ function termLabelUz(months, tailDays) {
 
 // Quantity (Soni) only makes sense for fungible, countable inventory —
 // hot-desks and virtual-office packages, where you can take several at once.
-// Space rented by area (private rooms, meeting/conference rooms) is a single
-// unit, so Soni is hidden and quantity is always 1.
+// Single spaces (rooms, meeting/conference rooms, area) are qty 1. Reads the
+// per-type spec (window.META.unitTypes) so this can't drift from the API.
 function isCountableUnit(type) {
-  return type === 'desk' || type === 'virtual_office';
+  return !!window.unitTypeMeta(type)?.fungible;
 }
 
 // Monthly lease dates are pure calendar dates — parse them at UTC midnight so
@@ -3482,18 +3515,26 @@ function BuildingsScreen({ search, role }) {
 function AddOfferingForm({ building, onDone }) {
   const offered = new Set((building.offerings || []).map((o) => o.productId || o.product?.id));
   const available = (window.PRODUCTS || []).filter((p) => !offered.has(p.id));
-  const [f, setF] = React.useState(() => ({ productId: (available[0] || {}).id || '', price: '', qty: 1 }));
+  const [f, setF] = React.useState(() => ({ productId: (available[0] || {}).id || '', price: '', qty: 1, m2: '' }));
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
   const product = available.find((p) => p.id === f.productId);
+  const spec = window.unitTypeMeta(product?.type);
+  // The auto-created default unit must satisfy the type spec (m² for virtual
+  // offices / area products; stock only for fungible types).
+  const m2Missing = spec.m2 === 'required' && !(Number(f.m2) >= 1);
 
   const submit = async () => {
-    if (!f.productId || !f.price) return;
+    if (!f.productId || !f.price || m2Missing) return;
     setErr(null); setBusy(true);
     try {
-      await api.post('/offerings', { buildingId: building.id, productId: f.productId, price: Number(f.price), qty: Number(f.qty) || 1 });
+      await api.post('/offerings', {
+        buildingId: building.id, productId: f.productId, price: Number(f.price),
+        qty: spec.fungible ? (Number(f.qty) || 1) : 1,
+        ...(f.m2 !== '' ? { m2: Number(f.m2) } : {}),
+      });
       if (window.__gorentRefresh) await window.__gorentRefresh();
       onDone();
     } catch (e) {
@@ -3513,7 +3554,7 @@ function AddOfferingForm({ building, onDone }) {
   return (
     <div style={{ padding: 14, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)' }}>
       <div style={{ font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Yangi taklif</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `2fr 1fr${spec.fungible ? ' 1fr' : ''}${spec.m2 === 'required' ? ' 1fr' : ''}`, gap: 10, marginBottom: 12 }}>
         <div>
           <Label>Katalog mahsuloti</Label>
           <select className="adm-select" style={{ width: '100%' }} value={f.productId} onChange={(e) => set('productId', e.target.value)}>
@@ -3521,20 +3562,28 @@ function AddOfferingForm({ building, onDone }) {
           </select>
         </div>
         <div>
-          <Label>Narx (so'm/{window.periodLabel(product?.period || 'month')})</Label>
-          <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="2500000" />
+          <Label>Narx ({window.priceUnitLabel(product)})</Label>
+          <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder={spec.priceBasis === 'per_m2' ? '150000' : '2500000'} />
         </div>
-        <div>
-          <Label>Soni (birlik zaxirasi)</Label>
-          <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
-        </div>
+        {spec.fungible && (
+          <div>
+            <Label>Soni (birlik zaxirasi)</Label>
+            <input className="adm-input" type="number" min={1} value={f.qty} onChange={(e) => set('qty', e.target.value)} />
+          </div>
+        )}
+        {spec.m2 === 'required' && (
+          <div>
+            <Label>Maydoni (m²) — majburiy</Label>
+            <input className="adm-input" type="number" min={1} value={f.m2} onChange={(e) => set('m2', e.target.value)} placeholder="18" />
+          </div>
+        )}
       </div>
       {err && (
         <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 9 }}>{err}</div>
       )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Btn kind="ghost" sm onClick={onDone}>{window.AT.cancel}</Btn>
-        <Btn kind="primary" sm onClick={submit} disabled={busy || !f.productId || !f.price}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !f.productId || !f.price || m2Missing}><IconCheck size={14} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
       </div>
     </div>
   );
