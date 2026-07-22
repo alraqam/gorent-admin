@@ -1812,9 +1812,21 @@ function CategorySplitPanel() {
 }
 
 function OccupancyPanel() {
+  const so = window.spaceOccupancy;
   return (
     <Card>
       <SectionHead title="Toifalar bandligi" sub="O'rtacha bandlik darajasi" />
+      {so && (
+        <div style={{ padding: '12px 14px', borderRadius: 12, background: 'var(--g-bg)', marginBottom: 15 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+            <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Band maydon (hozir)</span>
+            <span style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+              {so.pct}% <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>· {window.fmtSom(so.usedM2)} / {window.fmtSom(so.totalM2)} m²</span>
+            </span>
+          </div>
+          <ProgressBar value={so.pct} color="var(--g-brand)" />
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
         {window.byCategory.map((c) => (
           <div key={c.id}>

@@ -168,6 +168,7 @@ async function bootstrap() {
     window.totalBookings = overview.totals.totalBookings;
     window.activeBookings = overview.totals.activeBookings;
     window.avgOccupancy = overview.totals.avgOccupancy;
+    window.spaceOccupancy = overview.totals.spaceOccupancy || null;
     window.pendingApproval = overview.totals.pendingApproval;
     window.avgRating = overview.totals.avgRating;
   }
