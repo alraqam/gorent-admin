@@ -3486,11 +3486,10 @@ function BuildingsScreen({ search, role }) {
     { key: 'physical', label: 'Maydon / Qavat', render: (b) => (
       <div>
         <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.totalM2 ? `${b.totalM2} m²` : '—'} · {b.floors ? `${b.floors} qavat` : '—'}</div>
-        {(b.facilities || []).length > 0 && (
-          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>
-            {(b.facilities || []).length} qulaylik
-          </div>
-        )}
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>
+          Band: {b.usedM2 || 0} m²{b.totalM2 ? ` (${Math.round(((b.usedM2 || 0) / b.totalM2) * 100)}%)` : ''}
+          {(b.facilities || []).length > 0 ? ` · ${(b.facilities || []).length} qulaylik` : ''}
+        </div>
       </div>
     ) },
     { key: 'offerings', label: 'Takliflar', align: 'center', render: (b) => <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{(b.offerings || []).length}</span> },
@@ -3841,6 +3840,25 @@ function BuildingForm({ building, role, onClose }) {
               <input className="adm-input" type="number" min={0} value={f.floors} onChange={(e) => set('floors', e.target.value)} placeholder="9" />
             </div>
           </div>
+          {isEdit && (() => {
+            const used = building.usedM2 || 0;
+            const total = Number(f.totalM2) || 0;
+            const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 6 }}>
+                  <span>Band maydon (hozir)</span>
+                  <span>{used} m²{total > 0 ? ` / ${total} m² · ${pct}%` : ''}</span>
+                </div>
+                <div style={{ height: 8, borderRadius: 999, background: 'var(--g-line)', overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: 'var(--g-brand)' }} />
+                </div>
+                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 5 }}>
+                  Faol/tasdiqlangan bandlovlardagi birliklar maydoni (qty × m²). Virtual ofislar hisobga olinmaydi.
+                </div>
+              </div>
+            );
+          })()}
           <Label>Qulayliklar</Label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {(window.AMENITIES || []).map((a) => {
