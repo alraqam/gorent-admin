@@ -740,6 +740,7 @@ const MAP_POSITIONS = {
 const AMENITIES = [
   { id: 'wifi', name: "Tezkor Wi-Fi" },
   { id: 'ac', name: "Konditsioner" },
+  { id: 'lift', name: "Lift" },
   { id: 'meeting', name: "Yig'ilish xonasi" },
   { id: 'kitchen', name: "Oshxona" },
   { id: 'parking', name: "Avtoturargoh" },
@@ -3482,6 +3483,16 @@ function BuildingsScreen({ search, role }) {
         {b.kadastrFile && <span title="Kadastr fayli yuklangan" style={{ color: 'oklch(0.52 0.13 155)', display: 'flex' }}><IconDoc size={14} /></span>}
       </div>
     ) },
+    { key: 'physical', label: 'Maydon / Qavat', render: (b) => (
+      <div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{b.totalM2 ? `${b.totalM2} m²` : '—'} · {b.floors ? `${b.floors} qavat` : '—'}</div>
+        {(b.facilities || []).length > 0 && (
+          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>
+            {(b.facilities || []).length} qulaylik
+          </div>
+        )}
+      </div>
+    ) },
     { key: 'offerings', label: 'Takliflar', align: 'center', render: (b) => <span style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{(b.offerings || []).length}</span> },
     { key: 'status', label: window.AT.status, render: (b) => <StatusPill s={b.status} /> },
     { key: 'act', label: '', align: 'right', render: (b) => (
@@ -3727,12 +3738,17 @@ function BuildingForm({ building, role, onClose }) {
     district: building.district || window.DISTRICTS_TASHKENT[0], ownerName: building.ownerName || '',
     ownerInn: building.ownerInn || '', ownerPhone: building.ownerPhone || '',
     kadastrNumber: building.kadastrNumber || '', status: building.status || 'draft',
+    totalM2: building.totalM2 ?? '', floors: building.floors ?? '', facilities: building.facilities || [],
     marketplace: !!building.marketplace,
   } : {
     name: '', address: '', city: 'Toshkent', district: window.DISTRICTS_TASHKENT[0],
     ownerName: '', ownerInn: '', ownerPhone: '', kadastrNumber: '', status: 'draft',
+    totalM2: '', floors: '', facilities: [],
     marketplace: false, // default: private SaaS usage
   });
+  const toggleFacility = (id) => setF((s) => ({
+    ...s, facilities: s.facilities.includes(id) ? s.facilities.filter((x) => x !== id) : [...s.facilities, id],
+  }));
   const [kadastrFile, setKadastrFile] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -3748,6 +3764,9 @@ function BuildingForm({ building, role, onClose }) {
         ownerInn: f.ownerInn.trim() || null,
         ownerPhone: f.ownerPhone.trim() || null,
         kadastrNumber: f.kadastrNumber.trim() || null,
+        totalM2: f.totalM2 === '' ? null : Number(f.totalM2),
+        floors: f.floors === '' ? null : Number(f.floors),
+        facilities: f.facilities,
         status: f.status,
         marketplace: f.marketplace,
       };
@@ -3807,6 +3826,37 @@ function BuildingForm({ building, role, onClose }) {
                 {Object.entries(window.PRODUCT_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>
             </div>
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Bino xususiyatlari</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
+            <div>
+              <Label>Umumiy maydon (m²)</Label>
+              <input className="adm-input" type="number" min={0} value={f.totalM2} onChange={(e) => set('totalM2', e.target.value)} placeholder="3200" />
+            </div>
+            <div>
+              <Label>Qavatlar soni</Label>
+              <input className="adm-input" type="number" min={0} value={f.floors} onChange={(e) => set('floors', e.target.value)} placeholder="9" />
+            </div>
+          </div>
+          <Label>Qulayliklar</Label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {(window.AMENITIES || []).map((a) => {
+              const on = f.facilities.includes(a.id);
+              return (
+                <button key={a.id} type="button" onClick={() => toggleFacility(a.id)}
+                  style={{
+                    padding: '7px 13px', borderRadius: 999, cursor: 'pointer',
+                    border: `1.5px solid ${on ? 'var(--g-brand)' : 'var(--g-line)'}`,
+                    background: on ? 'var(--g-brand)' : 'var(--g-surface)',
+                    color: on ? '#fff' : 'var(--g-ink-2)', font: `600 12.5px ${window.GO.font}`,
+                  }}>
+                  {a.name}
+                </button>
+              );
+            })}
           </div>
         </Card>
 
