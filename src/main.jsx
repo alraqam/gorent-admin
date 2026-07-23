@@ -2943,21 +2943,24 @@ function BookingForm({ booking, onClose, onSave }) {
   let total = 0;
   // Resolve a unit's booked qty (fungible → chosen qty, else 1).
   const qtyOf = (u, q) => (isCountableUnit(u?.offering?.product?.type) ? (Number(q) || 1) : 1);
-  // Monthly booking may bundle several units (primary + extras), all sharing the
-  // term. Build a per-item term list; the booking total is the sum.
+  // Monthly booking may bundle several units (primary + extras). Each line has
+  // its OWN term (defaults to the primary's dates); the booking total is the sum.
   const monthlyItems = period === 'month'
-    ? [{ unitId: f.unitId, qty: f.qty }, ...(f.extraItems || [])]
+    ? [{ unitId: f.unitId, qty: f.qty, start: f.date, end: f.endDate }, ...(f.extraItems || [])]
     : [];
-  const itemTerms = (period === 'month' && mStart && mEndExcl && mEndExcl > mStart)
+  const itemTerms = period === 'month'
     ? monthlyItems.map((it) => {
         const u = units.find((x) => x.id === it.unitId);
-        if (!u) return null;
+        const s = it.start ? utcMidnight(it.start) : null;
+        const e = it.end ? monthlyEndExclusive(it.end) : null;
+        if (!u || !s || !e || !(e > s)) return null;
         const q = qtyOf(u, it.qty);
-        return { unit: u, qty: q, term: monthlyTerm(mStart, mEndExcl, rateFor(u), q) };
+        return { unit: u, qty: q, start: s, end: e, term: monthlyTerm(s, e, rateFor(u), q) };
       }).filter((x) => x && x.term)
     : [];
-  // The term shape (months / pro-rata tail) is shared across items — take it
-  // from the first for the labels.
+  // All items must resolve to a valid term for the bundle to be submittable.
+  const allItemsValid = period !== 'month' || itemTerms.length === monthlyItems.length;
+  // The term shape (months / pro-rata tail) — take the first line's for labels.
   const term = itemTerms.length ? itemTerms[0].term : null;
   // Monthly units in the primary's building that can be added as extra lines.
   const primaryBuildingId = unit?.offering?.building?.id;
@@ -2967,7 +2970,8 @@ function BookingForm({ booking, onClose, onSave }) {
         && u.id !== f.unitId
         && !(f.extraItems || []).some((e) => e.unitId === u.id))
     : [];
-  const addExtra = () => { const a = addableUnits[0]; if (a) setF((s) => ({ ...s, extraItems: [...(s.extraItems || []), { unitId: a.id, qty: 1 }] })); };
+  // New lines default to the primary's dates; the operator can change them.
+  const addExtra = () => { const a = addableUnits[0]; if (a) setF((s) => ({ ...s, extraItems: [...(s.extraItems || []), { unitId: a.id, qty: 1, start: s.date, end: s.endDate }] })); };
   const setExtra = (i, k, v) => setF((s) => { const arr = [...(s.extraItems || [])]; arr[i] = { ...arr[i], [k]: v }; return { ...s, extraItems: arr }; });
   const removeExtra = (i) => setF((s) => ({ ...s, extraItems: (s.extraItems || []).filter((_, idx) => idx !== i) }));
   if (period === 'month') {
@@ -2985,7 +2989,7 @@ function BookingForm({ booking, onClose, onSave }) {
   const canSubmit = isEdit
     ? !!f.customer.trim()
     : !!(f.customer.trim() && unit && startDt
-        && (period === 'month' ? (term && f.companyId) : (endDt && endDt > startDt)));
+        && (period === 'month' ? (term && f.companyId && allItemsValid) : (endDt && endDt > startDt)));
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -2996,9 +3000,14 @@ function BookingForm({ booking, onClose, onSave }) {
           customer: f.customer.trim(), phone: f.phone.trim(), companyId: f.companyId || null,
         });
       } else if (period === 'month') {
+        // Each line carries its own term (UTC-midnight start, exclusive end).
         const items = monthlyItems.map((it) => {
           const u = units.find((x) => x.id === it.unitId);
-          return { unitId: it.unitId, qty: qtyOf(u, it.qty) };
+          return {
+            unitId: it.unitId, qty: qtyOf(u, it.qty),
+            start: utcMidnight(it.start).toISOString(),
+            end: monthlyEndExclusive(it.end).toISOString(),
+          };
         });
         await api.post('/bookings', {
           items, customer: f.customer.trim(), phone: f.phone.trim(),
@@ -3123,20 +3132,33 @@ function BookingForm({ booking, onClose, onSave }) {
                         const euShowQty = isCountableUnit(eu?.offering?.product?.type);
                         const opts = [eu, ...addableUnits].filter(Boolean);
                         return (
-                          <div key={i} style={{ display: 'grid', gridTemplateColumns: euShowQty ? '1fr 90px auto' : '1fr auto', gap: 10, alignItems: 'end' }}>
-                            <div>
-                              <Label>Qo'shimcha birlik {i + 2}</Label>
-                              <select className="adm-select" style={{ width: '100%' }} value={it.unitId} onChange={(e) => setExtra(i, 'unitId', e.target.value)}>
-                                {opts.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
-                              </select>
-                            </div>
-                            {euShowQty && (
+                          <div key={i} style={{ padding: '11px 12px', borderRadius: 10, background: 'var(--g-bg)' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: euShowQty ? '1fr 90px auto' : '1fr auto', gap: 10, alignItems: 'end' }}>
                               <div>
-                                <Label>Soni</Label>
-                                <input className="adm-input" type="number" min={1} value={it.qty} onChange={(e) => setExtra(i, 'qty', e.target.value)} />
+                                <Label>Qo'shimcha birlik {i + 2}</Label>
+                                <select className="adm-select" style={{ width: '100%' }} value={it.unitId} onChange={(e) => setExtra(i, 'unitId', e.target.value)}>
+                                  {opts.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
+                                </select>
                               </div>
-                            )}
-                            <Btn kind="ghost" sm onClick={() => removeExtra(i)}><IconTrash size={14} /></Btn>
+                              {euShowQty && (
+                                <div>
+                                  <Label>Soni</Label>
+                                  <input className="adm-input" type="number" min={1} value={it.qty} onChange={(e) => setExtra(i, 'qty', e.target.value)} />
+                                </div>
+                              )}
+                              <Btn kind="ghost" sm onClick={() => removeExtra(i)}><IconTrash size={14} /></Btn>
+                            </div>
+                            {/* Per-line term — differs from the primary when the operator changes it. */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
+                              <div>
+                                <Label>Boshlanish</Label>
+                                <input className="adm-input" type="date" value={it.start || ''} onChange={(e) => setExtra(i, 'start', e.target.value)} />
+                              </div>
+                              <div>
+                                <Label>Tugash</Label>
+                                <input className="adm-input" type="date" min={it.start || undefined} value={it.end || ''} onChange={(e) => setExtra(i, 'end', e.target.value)} />
+                              </div>
+                            </div>
                           </div>
                         );
                       })}
@@ -3230,7 +3252,7 @@ function BookingForm({ booking, onClose, onSave }) {
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
                   {period === 'month' && itemTerms.length > 1 && itemTerms.map((it, i) => (
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 5 }}>
-                      <span>{it.unit.name}{it.qty > 1 ? ` × ${it.qty}` : ''}</span>
+                      <span>{it.unit.name}{it.qty > 1 ? ` × ${it.qty}` : ''} · {termLabelUz(it.term.months, it.term.tailDays)}</span>
                       <span>{window.fmtCompactSom(it.term.total)} so'm</span>
                     </div>
                   ))}
