@@ -1134,11 +1134,11 @@ const avgRating = 0;
 const KPIS = [];
 
 // ─── Formatters ─────────────────────────────────────────────
+// Full exact figure with thousand separators — prices are shown in full, never
+// abbreviated to "mln/ming" (which rounds). Kept as a distinct name because many
+// call sites use it; output is identical to fmtSom.
 function fmtCompactSom(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2).replace('.', ',') + " mlrd";
-  if (n >= 1e6) return parseFloat((n / 1e6).toFixed(1)) + " mln";
-  if (n >= 1e3) return (n / 1e3).toFixed(0) + " ming";
-  return String(n);
+  return fmtSom(n);
 }
 function fmtSomFull(n) { return window.fmtSom(n) + " so'm"; }
 
@@ -1775,16 +1775,16 @@ function RevenuePanel({ tall }) {
     <Card style={{ display: 'flex', flexDirection: 'column' }}>
       <SectionHead
         title="Daromad dinamikasi"
-        sub="Oxirgi 12 oy · mln so'm"
+        sub="Oxirgi 12 oy · so'm"
         right={<Segmented value="12m" onChange={() => {}} options={[
           { value: '3m', label: "3 oy" }, { value: '6m', label: "6 oy" }, { value: '12m', label: "12 oy" },
         ]} />}
       />
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 18 }}>
-        <div style={{ font: `700 30px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.03em' }}>{window.fmtSom(total)} <span style={{ fontSize: 16, color: 'var(--g-ink-4)', fontWeight: 500 }}>mln so'm</span></div>
+        <div style={{ font: `700 30px ${window.GO.font}`, color: 'var(--g-ink)', letterSpacing: '-0.03em' }}>{window.fmtSom(total)} <span style={{ fontSize: 16, color: 'var(--g-ink-4)', fontWeight: 500 }}>so'm</span></div>
         <Delta value={12.4} />
       </div>
-      <BarChart data={data} h={tall ? 230 : 180} unit=" mln" fmt={(v) => window.fmtSom(v)} />
+      <BarChart data={data} h={tall ? 230 : 180} unit=" so'm" fmt={(v) => window.fmtSom(v)} />
     </Card>
   );
 }
@@ -3989,8 +3989,8 @@ function RevenueScreen({ search, role }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1fr', gap: 16, marginBottom: 18 }}>
         <Card>
-          <SectionHead title="Oylik aylanma" sub="Daromad va platforma komissiyasi · mln so'm" />
-          <BarChart data={window.revenueSeries} h={200} unit=" mln" fmt={(v) => window.fmtSom(v)} />
+          <SectionHead title="Oylik aylanma" sub="Daromad va platforma komissiyasi · so'm" />
+          <BarChart data={window.revenueSeries} h={200} unit=" so'm" fmt={(v) => window.fmtSom(v)} />
         </Card>
         <Card>
           <SectionHead title="To'lov holati" />
