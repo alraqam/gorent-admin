@@ -2882,6 +2882,9 @@ function BookingForm({ booking, onClose, onSave }) {
   } : {
     unitId: ((window.UNITS || [])[0] || {}).id || '', customer: '', phone: '', companyId: '',
     qty: 1, months: 1, date: '', startTime: '09:00', endTime: '10:00', endDate: '',
+    // Additional rented units for a monthly bundle (office + desks + address).
+    // Each is { unitId, qty }; all must be monthly units in the primary's building.
+    extraItems: [],
   });
   const [companies, setCompanies] = React.useState(() => window.COMPANIES || []);
   const [avail, setAvail] = React.useState(null);
@@ -2938,15 +2941,39 @@ function BookingForm({ booking, onClose, onSave }) {
   const mEndExcl = period === 'month' && f.endDate ? monthlyEndExclusive(f.endDate) : null;
   let spanLabel = '';
   let total = 0;
-  // For monthly leases the term schedule (whole months + pro-rata tail) is the
-  // source of truth; hourly/daily stay a flat count × price.
-  const term = period === 'month' && unit && mStart && mEndExcl && mEndExcl > mStart
-    ? monthlyTerm(mStart, mEndExcl, rateFor(unit), effectiveQty)
-    : null;
+  // Resolve a unit's booked qty (fungible → chosen qty, else 1).
+  const qtyOf = (u, q) => (isCountableUnit(u?.offering?.product?.type) ? (Number(q) || 1) : 1);
+  // Monthly booking may bundle several units (primary + extras), all sharing the
+  // term. Build a per-item term list; the booking total is the sum.
+  const monthlyItems = period === 'month'
+    ? [{ unitId: f.unitId, qty: f.qty }, ...(f.extraItems || [])]
+    : [];
+  const itemTerms = (period === 'month' && mStart && mEndExcl && mEndExcl > mStart)
+    ? monthlyItems.map((it) => {
+        const u = units.find((x) => x.id === it.unitId);
+        if (!u) return null;
+        const q = qtyOf(u, it.qty);
+        return { unit: u, qty: q, term: monthlyTerm(mStart, mEndExcl, rateFor(u), q) };
+      }).filter((x) => x && x.term)
+    : [];
+  // The term shape (months / pro-rata tail) is shared across items — take it
+  // from the first for the labels.
+  const term = itemTerms.length ? itemTerms[0].term : null;
+  // Monthly units in the primary's building that can be added as extra lines.
+  const primaryBuildingId = unit?.offering?.building?.id;
+  const addableUnits = period === 'month' && unit
+    ? units.filter((u) => u.offering?.product?.period === 'month'
+        && u.offering?.building?.id === primaryBuildingId
+        && u.id !== f.unitId
+        && !(f.extraItems || []).some((e) => e.unitId === u.id))
+    : [];
+  const addExtra = () => { const a = addableUnits[0]; if (a) setF((s) => ({ ...s, extraItems: [...(s.extraItems || []), { unitId: a.id, qty: 1 }] })); };
+  const setExtra = (i, k, v) => setF((s) => { const arr = [...(s.extraItems || [])]; arr[i] = { ...arr[i], [k]: v }; return { ...s, extraItems: arr }; });
+  const removeExtra = (i) => setF((s) => ({ ...s, extraItems: (s.extraItems || []).filter((_, idx) => idx !== i) }));
   if (period === 'month') {
     if (term) {
       spanLabel = termLabelUz(term.months, term.tailDays);
-      total = term.total;
+      total = itemTerms.reduce((s, it) => s + it.term.total, 0);
     }
   } else if (startDt && endDt && endDt > startDt) {
     const ms = endDt.getTime() - startDt.getTime();
@@ -2969,9 +2996,13 @@ function BookingForm({ booking, onClose, onSave }) {
           customer: f.customer.trim(), phone: f.phone.trim(), companyId: f.companyId || null,
         });
       } else if (period === 'month') {
+        const items = monthlyItems.map((it) => {
+          const u = units.find((x) => x.id === it.unitId);
+          return { unitId: it.unitId, qty: qtyOf(u, it.qty) };
+        });
         await api.post('/bookings', {
-          unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
-          companyId: f.companyId, start: mStart.toISOString(), end: mEndExcl.toISOString(), qty: effectiveQty,
+          items, customer: f.customer.trim(), phone: f.phone.trim(),
+          companyId: f.companyId, start: mStart.toISOString(), end: mEndExcl.toISOString(),
         });
       } else {
         await api.post('/bookings', {
@@ -3083,6 +3114,37 @@ function BookingForm({ booking, onClose, onSave }) {
                       Tugash sanasi boshlanishdan keyin bo'lishi kerak.
                     </div>
                   )}
+                  {/* Additional units — one booking may bundle several monthly
+                      products in the same building (office + desks + address). */}
+                  {(f.extraItems || []).length > 0 && (
+                    <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {f.extraItems.map((it, i) => {
+                        const eu = units.find((u) => u.id === it.unitId);
+                        const euShowQty = isCountableUnit(eu?.offering?.product?.type);
+                        const opts = [eu, ...addableUnits].filter(Boolean);
+                        return (
+                          <div key={i} style={{ display: 'grid', gridTemplateColumns: euShowQty ? '1fr 90px auto' : '1fr auto', gap: 10, alignItems: 'end' }}>
+                            <div>
+                              <Label>Qo'shimcha birlik {i + 2}</Label>
+                              <select className="adm-select" style={{ width: '100%' }} value={it.unitId} onChange={(e) => setExtra(i, 'unitId', e.target.value)}>
+                                {opts.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
+                              </select>
+                            </div>
+                            {euShowQty && (
+                              <div>
+                                <Label>Soni</Label>
+                                <input className="adm-input" type="number" min={1} value={it.qty} onChange={(e) => setExtra(i, 'qty', e.target.value)} />
+                              </div>
+                            )}
+                            <Btn kind="ghost" sm onClick={() => removeExtra(i)}><IconTrash size={14} /></Btn>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {addableUnits.length > 0 && (
+                    <Btn kind="ghost" sm style={{ marginTop: 10 }} onClick={addExtra}><IconPlus size={14} /> Birlik qo'shish</Btn>
+                  )}
                 </>
               ) : period === 'hour' ? (
                 <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 14 }}>
@@ -3165,9 +3227,17 @@ function BookingForm({ booking, onClose, onSave }) {
                 </div>
               )}
               {!isEdit && total > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
-                  <span>Jami ({spanLabel}{showQty ? ` × ${effectiveQty}` : ''})</span>
-                  <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(total)} so'm</span>
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
+                  {period === 'month' && itemTerms.length > 1 && itemTerms.map((it, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 5 }}>
+                      <span>{it.unit.name}{it.qty > 1 ? ` × ${it.qty}` : ''}</span>
+                      <span>{window.fmtCompactSom(it.term.total)} so'm</span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', font: `600 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+                    <span>Jami {period === 'month' && itemTerms.length > 1 ? `(${spanLabel}, ${itemTerms.length} birlik)` : `(${spanLabel}${showQty ? ` × ${effectiveQty}` : ''})`}</span>
+                    <span style={{ fontWeight: 700, color: 'var(--g-brand)' }}>{window.fmtCompactSom(total)} so'm</span>
+                  </div>
                 </div>
               )}
             </Card>
