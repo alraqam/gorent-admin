@@ -2869,22 +2869,58 @@ function monthlyEndExclusive(ymd) {
   return addUTCDays(utcMidnight(ymd), 1);
 }
 
-// New-booking form. Month-period units take a company (required) + an end date
-// (the term may end mid-month, billed pro-rata); hour/day units take start/end
-// with an availability preview for the day.
-// Edits only touch customer / phone / company (PATCH contract).
+// Booking form — create AND edit. Month-period units take a company (required)
+// + an end date (the term may end mid-month, billed pro-rata); hour/day units
+// take start/end with an availability preview for the day. Editing re-sends the
+// full payload via PATCH: the server re-prices the term and re-checks slot
+// conflicts (excluding this booking), so every field is editable except for
+// cancelled/completed bookings, which the server rejects.
 function BookingForm({ booking, onClose, onSave }) {
   const isEdit = !!booking;
-  const [f, setF] = React.useState(() => booking ? {
-    unitId: booking.unitId, customer: booking.customer, phone: booking.phone || '',
-    companyId: booking.companyId || '', qty: booking.qty || 1, months: booking.months || 1,
-    date: '', startTime: '09:00', endTime: '10:00', endDate: '',
-  } : {
-    unitId: ((window.UNITS || [])[0] || {}).id || '', customer: '', phone: '', companyId: '',
-    qty: 1, months: 1, date: '', startTime: '09:00', endTime: '10:00', endDate: '',
-    // Additional rented units for a monthly bundle (office + desks + address).
-    // Each is { unitId, qty }; all must be monthly units in the primary's building.
-    extraItems: [],
+  const [f, setF] = React.useState(() => {
+    if (!booking) return {
+      unitId: ((window.UNITS || [])[0] || {}).id || '', customer: '', phone: '', companyId: '',
+      qty: 1, months: 1, price: '', date: '', startTime: '09:00', endTime: '10:00', endDate: '',
+      // Additional rented units for a monthly bundle (office + desks + address).
+      // Each is { unitId, qty, start, end, price }; all must be monthly units in
+      // the primary's building.
+      extraItems: [],
+    };
+    // Reconstruct the picker inputs from the stored booking. Monthly terms are
+    // UTC-anchored with an EXCLUSIVE end (last day + 1), so the inclusive end
+    // date shown is end − 1; hour/day terms are stored in local time.
+    const period = booking.unit?.offering?.product?.period || 'month';
+    const items = booking.items || [];
+    const primary = items.find((i) => i.unitId === booking.unitId) || items[0] || null;
+    const extras = items.filter((i) => i !== primary);
+    const pad = (n) => String(n).padStart(2, '0');
+    const ymdUTC = (iso) => { const d = new Date(iso); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
+    const ymdLocal = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+    const base = {
+      unitId: booking.unitId, customer: booking.customer, phone: booking.phone || '',
+      companyId: booking.companyId || '', qty: booking.qty || 1, months: booking.months || 1,
+      // Prefill the negotiated rate so an edit preserves it (monthly only; the
+      // hourly/daily rate isn't stored per-unit, so it falls back to catalog).
+      price: primary?.monthlyPrice ?? '',
+      date: '', startTime: '09:00', endTime: '10:00', endDate: '', extraItems: [],
+    };
+    if (period === 'hour') {
+      base.date = ymdLocal(booking.start);
+      base.startTime = fmtTimeHM(booking.start);
+      base.endTime = fmtTimeHM(booking.end);
+    } else if (period === 'day') {
+      base.date = ymdLocal(booking.start);
+      base.endDate = ymdLocal(booking.end);
+    } else {
+      base.date = ymdUTC(primary?.start ?? booking.start);
+      base.endDate = ymdUTC(endMinusDay(primary?.end ?? booking.end));
+      base.extraItems = extras.map((it) => ({
+        unitId: it.unitId, qty: it.qty,
+        start: ymdUTC(it.start), end: ymdUTC(endMinusDay(it.end)),
+        price: it.monthlyPrice ?? '',
+      }));
+    }
+    return base;
   });
   const [companies, setCompanies] = React.useState(() => window.COMPANIES || []);
   const [avail, setAvail] = React.useState(null);
@@ -2902,6 +2938,11 @@ function BookingForm({ booking, onClose, onSave }) {
   const isAreaUnit = (u) => u?.offering?.product?.type === 'area';
   // The effective per-unit period rate: area units bill rate × m².
   const rateFor = (u) => isAreaUnit(u) ? unitPrice(u) * (u.m2 || 0) : unitPrice(u);
+  // A blank/invalid negotiated-price override falls back to the catalog rate.
+  const priceNum = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
+  // Effective line rate: an explicit override wins (absolute, per period — NOT
+  // ×m² even for area units, matching the server), else the catalog rate.
+  const priceOr = (u, override) => { const p = priceNum(override); return p != null ? p : rateFor(u); };
   // Soni is shown only for countable units; area-priced spaces are always qty 1.
   const showQty = isCountableUnit(unit?.offering?.product?.type);
   const effectiveQty = showQty ? (Number(f.qty) || 1) : 1;
@@ -2915,7 +2956,7 @@ function BookingForm({ booking, onClose, onSave }) {
   // Busy slots for hour/day units on the picked date.
   React.useEffect(() => {
     setAvail(null);
-    if (isEdit || !unit || period === 'month' || !f.date) return undefined;
+    if (!unit || period === 'month' || !f.date) return undefined;
     let live = true;
     api.get(`/bookings/availability?unit=${encodeURIComponent(unit.id)}&date=${encodeURIComponent(f.date)}`)
       .then((d) => { if (live) setAvail(d); })
@@ -2946,7 +2987,7 @@ function BookingForm({ booking, onClose, onSave }) {
   // Monthly booking may bundle several units (primary + extras). Each line has
   // its OWN term (defaults to the primary's dates); the booking total is the sum.
   const monthlyItems = period === 'month'
-    ? [{ unitId: f.unitId, qty: f.qty, start: f.date, end: f.endDate }, ...(f.extraItems || [])]
+    ? [{ unitId: f.unitId, qty: f.qty, start: f.date, end: f.endDate, price: f.price }, ...(f.extraItems || [])]
     : [];
   const itemTerms = period === 'month'
     ? monthlyItems.map((it) => {
@@ -2955,7 +2996,7 @@ function BookingForm({ booking, onClose, onSave }) {
         const e = it.end ? monthlyEndExclusive(it.end) : null;
         if (!u || !s || !e || !(e > s)) return null;
         const q = qtyOf(u, it.qty);
-        return { unit: u, qty: q, start: s, end: e, term: monthlyTerm(s, e, rateFor(u), q) };
+        return { unit: u, qty: q, start: s, end: e, term: monthlyTerm(s, e, priceOr(u, it.price), q) };
       }).filter((x) => x && x.term)
     : [];
   // All items must resolve to a valid term for the bundle to be submittable.
@@ -2971,7 +3012,7 @@ function BookingForm({ booking, onClose, onSave }) {
         && !(f.extraItems || []).some((e) => e.unitId === u.id))
     : [];
   // New lines default to the primary's dates; the operator can change them.
-  const addExtra = () => { const a = addableUnits[0]; if (a) setF((s) => ({ ...s, extraItems: [...(s.extraItems || []), { unitId: a.id, qty: 1, start: s.date, end: s.endDate }] })); };
+  const addExtra = () => { const a = addableUnits[0]; if (a) setF((s) => ({ ...s, extraItems: [...(s.extraItems || []), { unitId: a.id, qty: 1, start: s.date, end: s.endDate, price: '' }] })); };
   const setExtra = (i, k, v) => setF((s) => { const arr = [...(s.extraItems || [])]; arr[i] = { ...arr[i], [k]: v }; return { ...s, extraItems: arr }; });
   const removeExtra = (i) => setF((s) => ({ ...s, extraItems: (s.extraItems || []).filter((_, idx) => idx !== i) }));
   if (period === 'month') {
@@ -2983,43 +3024,88 @@ function BookingForm({ booking, onClose, onSave }) {
     const ms = endDt.getTime() - startDt.getTime();
     const spanCount = period === 'hour' ? Math.ceil(ms / 3600000) : Math.max(1, Math.ceil(ms / 86400000));
     spanLabel = `${spanCount} ${window.periodLabel(period)}`;
-    total = unit ? rateFor(unit) * spanCount * effectiveQty : 0;
+    total = unit ? priceOr(unit, f.price) * spanCount * effectiveQty : 0;
   }
 
-  const canSubmit = isEdit
-    ? !!f.customer.trim()
-    : !!(f.customer.trim() && unit && startDt
-        && (period === 'month' ? (term && f.companyId && allItemsValid) : (endDt && endDt > startDt)));
+  // Changing the unit can switch the billing period (hour ↔ day ↔ month). The
+  // period-specific pickers differ, so seed a sensible default term for the new
+  // period when its inputs are empty — otherwise Save silently disables because
+  // e.g. a monthly unit needs an end date the hourly form never had.
+  const onUnitChange = (v) => setF((s) => {
+    const nu = units.find((u) => u.id === v);
+    const np = nu?.offering?.product?.period || 'month';
+    // A negotiated rate belongs to the old unit — clear it so the new unit bills
+    // at its own catalog rate (the operator can re-enter an override).
+    const next = { ...s, unitId: v, price: '' };
+    if ((np === 'month' || np === 'day') && s.date && !s.endDate) {
+      if (np === 'day') {
+        next.endDate = s.date; // one-day default
+      } else {
+        // One whole month: the inclusive end date is (start + 1 month − 1 day).
+        const d = utcMidnight(s.date);
+        d.setUTCMonth(d.getUTCMonth() + 1);
+        const incl = addUTCDays(d, -1);
+        const pad = (n) => String(n).padStart(2, '0');
+        next.endDate = `${incl.getUTCFullYear()}-${pad(incl.getUTCMonth() + 1)}-${pad(incl.getUTCDate())}`;
+      }
+    }
+    return next;
+  });
+
+  // Same validation for create and edit — dates/term/company are now editable.
+  const canSubmit = !!(f.customer.trim() && unit && startDt
+    && (period === 'month' ? (term && f.companyId && allItemsValid) : (endDt && endDt > startDt)));
+  // Why Save is disabled — surfaced so it's never a dead button.
+  let disabledReason = '';
+  if (!f.customer.trim()) disabledReason = 'Mijoz ismini kiriting';
+  else if (!unit) disabledReason = 'Birlik tanlang';
+  else if (period === 'month') {
+    if (!f.date || !f.endDate) disabledReason = "Sana oralig'ini tanlang";
+    else if (!term) disabledReason = "Tugash sanasi boshlanishdan keyin bo'lishi kerak";
+    else if (!f.companyId) disabledReason = 'Kompaniyani tanlang';
+    else if (!allItemsValid) disabledReason = "Qo'shimcha birliklar sanasini tekshiring";
+  } else {
+    if (!startDt || !endDt) disabledReason = "Vaqt oralig'ini tanlang";
+    else if (!(endDt > startDt)) disabledReason = "Tugash vaqti boshlanishdan keyin bo'lishi kerak";
+  }
 
   const submit = async () => {
     if (!canSubmit) return;
     setErr(null); setBusy(true);
     try {
-      if (isEdit) {
-        await api.patch(`/bookings/${booking.id}`, {
-          customer: f.customer.trim(), phone: f.phone.trim(), companyId: f.companyId || null,
-        });
-      } else if (period === 'month') {
-        // Each line carries its own term (UTC-midnight start, exclusive end).
+      let payload;
+      if (period === 'month') {
+        // Each line carries its own term (UTC-midnight start, exclusive end) and
+        // an optional negotiated rate.
         const items = monthlyItems.map((it) => {
           const u = units.find((x) => x.id === it.unitId);
+          const pr = priceNum(it.price);
           return {
             unitId: it.unitId, qty: qtyOf(u, it.qty),
             start: utcMidnight(it.start).toISOString(),
             end: monthlyEndExclusive(it.end).toISOString(),
+            ...(pr != null ? { price: pr } : {}),
           };
         });
-        await api.post('/bookings', {
+        payload = {
           items, customer: f.customer.trim(), phone: f.phone.trim(),
           companyId: f.companyId, start: mStart.toISOString(), end: mEndExcl.toISOString(),
-        });
+        };
       } else {
-        await api.post('/bookings', {
+        const pr = priceNum(f.price);
+        payload = {
           unitId: f.unitId, customer: f.customer.trim(), phone: f.phone.trim(),
           start: startDt.toISOString(), end: endDt.toISOString(), qty: effectiveQty,
           ...(f.companyId ? { companyId: f.companyId } : {}),
-        });
+          ...(pr != null ? { price: pr } : {}),
+        };
       }
+      if (isEdit) await api.patch(`/bookings/${booking.id}`, payload);
+      // Operator-created bookings are confirmed on the spot (the operator is
+      // making the reservation, not requesting one), so they immediately hold
+      // the slot AND count toward the building's occupied m². Only future
+      // marketplace requests would come in as 'pending'.
+      else await api.post('/bookings', { ...payload, status: 'confirmed' });
       if (window.__gorentRefresh) await window.__gorentRefresh();
       onSave();
     } catch (e) {
@@ -3034,6 +3120,15 @@ function BookingForm({ booking, onClose, onSave }) {
     const tm = window.unitTypeMeta(prod.type);
     return `${u.offering?.building?.name || '—'} · ${prod.name || '—'} · ${u.name} (${tm.short}, ${window.fmtSom(unitPrice(u))} so'm/${window.periodLabel(prod.period)})`;
   };
+
+  // Negotiated-rate override for the primary unit — on its own row so the tight
+  // date/time pickers don't squeeze it. Placeholder shows the catalog rate.
+  const priceRow = (
+    <div style={{ marginTop: 14, maxWidth: 260 }}>
+      <Label>Narx/{window.periodLabel(period)} (kelishilgan, ixtiyoriy)</Label>
+      <input className="adm-input" type="number" min={0} value={f.price} onChange={(e) => set('price', e.target.value)} placeholder={unit ? window.fmtSom(rateFor(unit)) : ''} />
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
@@ -3056,12 +3151,12 @@ function BookingForm({ booking, onClose, onSave }) {
               </div>
             </div>
             <div>
-              <Label>Kompaniya (ijarachi){!isEdit && period === 'month' ? ' — majburiy' : ''}</Label>
+              <Label>Kompaniya (ijarachi){period === 'month' ? ' — majburiy' : ''}</Label>
               <select className="adm-select" style={{ width: '100%' }} value={f.companyId} onChange={(e) => set('companyId', e.target.value)}>
                 <option value="">— Tanlanmagan —</option>
                 {companies.map((c) => <option key={c.id} value={c.id}>{c.name} · {window.taxLabel(c)}</option>)}
               </select>
-              {!isEdit && period === 'month' && !f.companyId && (
+              {period === 'month' && !f.companyId && (
                 <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.14 70)' }}>
                   Oylik ijara uchun kompaniya tanlash majburiy (hisob-faktura shu nomga chiqadi).
                 </div>
@@ -3069,7 +3164,7 @@ function BookingForm({ booking, onClose, onSave }) {
             </div>
           </Card>
 
-          {!isEdit && (
+          {(
             <Card>
               <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>Birlik va muddat</div>
               <div style={{ marginBottom: 14 }}>
@@ -3080,7 +3175,7 @@ function BookingForm({ booking, onClose, onSave }) {
                     <b> «Taklif qo'shish»</b> orqali katalogdan mahsulot tanlab, narx belgilang — birlik avtomatik yaratiladi.
                   </div>
                 ) : (
-                  <select className="adm-select" style={{ width: '100%' }} value={f.unitId} onChange={(e) => set('unitId', e.target.value)}>
+                  <select className="adm-select" style={{ width: '100%' }} value={f.unitId} onChange={(e) => onUnitChange(e.target.value)}>
                     {units.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
                   </select>
                 )}
@@ -3104,6 +3199,7 @@ function BookingForm({ booking, onClose, onSave }) {
                       </div>
                     )}
                   </div>
+                  {priceRow}
                   {/* Term preview: whole months + pro-rata tail (matches the API). */}
                   {term && (
                     <div style={{ marginTop: 12, padding: '11px 13px', borderRadius: 10, background: 'var(--g-bg)' }}>
@@ -3136,7 +3232,7 @@ function BookingForm({ booking, onClose, onSave }) {
                             <div style={{ display: 'grid', gridTemplateColumns: euShowQty ? '1fr 90px auto' : '1fr auto', gap: 10, alignItems: 'end' }}>
                               <div>
                                 <Label>Qo'shimcha birlik {i + 2}</Label>
-                                <select className="adm-select" style={{ width: '100%' }} value={it.unitId} onChange={(e) => setExtra(i, 'unitId', e.target.value)}>
+                                <select className="adm-select" style={{ width: '100%' }} value={it.unitId} onChange={(e) => setF((s) => { const arr = [...(s.extraItems || [])]; arr[i] = { ...arr[i], unitId: e.target.value, price: '' }; return { ...s, extraItems: arr }; })}>
                                   {opts.map((u) => <option key={u.id} value={u.id}>{unitLabel(u)}</option>)}
                                 </select>
                               </div>
@@ -3148,8 +3244,8 @@ function BookingForm({ booking, onClose, onSave }) {
                               )}
                               <Btn kind="ghost" sm onClick={() => removeExtra(i)}><IconTrash size={14} /></Btn>
                             </div>
-                            {/* Per-line term — differs from the primary when the operator changes it. */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
+                            {/* Per-line term + rate — differ from the primary when the operator changes them. */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 8 }}>
                               <div>
                                 <Label>Boshlanish</Label>
                                 <input className="adm-input" type="date" value={it.start || ''} onChange={(e) => setExtra(i, 'start', e.target.value)} />
@@ -3157,6 +3253,10 @@ function BookingForm({ booking, onClose, onSave }) {
                               <div>
                                 <Label>Tugash</Label>
                                 <input className="adm-input" type="date" min={it.start || undefined} value={it.end || ''} onChange={(e) => setExtra(i, 'end', e.target.value)} />
+                              </div>
+                              <div>
+                                <Label>Narx/oy (ixtiyoriy)</Label>
+                                <input className="adm-input" type="number" min={0} value={it.price || ''} onChange={(e) => setExtra(i, 'price', e.target.value)} placeholder={eu ? window.fmtSom(rateFor(eu)) : ''} />
                               </div>
                             </div>
                           </div>
@@ -3169,6 +3269,7 @@ function BookingForm({ booking, onClose, onSave }) {
                   )}
                 </>
               ) : period === 'hour' ? (
+                <>
                 <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Sana</Label>
@@ -3189,7 +3290,10 @@ function BookingForm({ booking, onClose, onSave }) {
                     </div>
                   )}
                 </div>
+                {priceRow}
+                </>
               ) : (
+                <>
                 <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr' : '1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Boshlanish sanasi</Label>
@@ -3206,23 +3310,29 @@ function BookingForm({ booking, onClose, onSave }) {
                     </div>
                   )}
                 </div>
+                {priceRow}
+                </>
               )}
 
-              {/* Availability — busy slots on the picked date */}
-              {period !== 'month' && f.date && avail && (
+              {/* Availability — busy slots on the picked date (the booking being
+                  edited is excluded, since it doesn't conflict with itself). */}
+              {period !== 'month' && f.date && avail && (() => {
+                const busy = (avail.busy || []).filter((s) => !isEdit || s.id !== booking.id);
+                return (
                 <div style={{ marginTop: 14, padding: '11px 13px', borderRadius: 10, background: 'var(--g-bg)' }}>
                   <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 6 }}>
                     Bandlik · {fmtDate(f.date + 'T00:00:00')}
                   </div>
-                  {(avail.busy || []).length === 0
+                  {busy.length === 0
                     ? <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)' }}>Bu kunda band emas — barcha vaqtlar bo'sh.</div>
-                    : (avail.busy || []).map((s) => (
+                    : busy.map((s) => (
                         <div key={s.id} style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.15 25)', marginBottom: 3 }}>
                           Band: {period === 'hour' ? `${fmtTimeHM(s.start)}–${fmtTimeHM(s.end)}` : `${fmtDate(s.start)} – ${fmtDate(s.end)}`} ({s.qty}/{avail.qty})
                         </div>
                       ))}
                 </div>
-              )}
+                );
+              })()}
             </Card>
           )}
 
@@ -3248,7 +3358,7 @@ function BookingForm({ booking, onClose, onSave }) {
                   <span>{unit.m2 || 0} m² × {window.fmtCompactSom(unitPrice(unit))} = {window.fmtCompactSom(rateFor(unit))} so'm/{window.periodLabel(period)}</span>
                 </div>
               )}
-              {!isEdit && total > 0 && (
+              {total > 0 && (
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--g-line)' }}>
                   {period === 'month' && itemTerms.length > 1 && itemTerms.map((it, i) => (
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 5 }}>
@@ -3267,6 +3377,9 @@ function BookingForm({ booking, onClose, onSave }) {
 
           <Card>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {!canSubmit && disabledReason && (
+                <div style={{ font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.14 70)', textAlign: 'center' }}>{disabledReason}</div>
+              )}
               <Btn kind="primary" style={{ justifyContent: 'center' }} onClick={submit} disabled={busy || !canSubmit}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
               <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
             </div>
