@@ -778,6 +778,7 @@ const IconChevR      = (p) => <Ico {...p} d="M9 6l6 6-6 6" />;
 const IconChevL      = (p) => <Ico {...p} d="M15 6l-6 6 6 6" />;
 const IconChevUp     = (p) => <Ico {...p} d="M6 15l6-6 6 6" />;
 const IconClose      = (p) => <Ico {...p} d="M6 6l12 12M18 6L6 18" />;
+const IconCalendar   = (p) => <Ico {...p} d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z M8 3v4 M16 3v4 M4 10h16" />;
 const IconHeart      = (p) => <Ico {...p} d="M12 20s-7-4.35-9.5-9C.5 6.5 4 3 7.5 4.5 9.4 5.3 12 8 12 8s2.6-2.7 4.5-3.5C20 3 23.5 6.5 21.5 11 19 15.65 12 20 12 20z" />;
 const IconStar       = (p) => <Ico {...p} fill="currentColor" sw={0} d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5 7.3 14 2.5 9.4l6.6-.9L12 2.5z" />;
 const IconStarO      = (p) => <Ico {...p} d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4 6.1 20.5 7.3 14 2.5 9.4l6.6-.9L12 2.5z" />;
@@ -1110,6 +1111,64 @@ function fmtBookingRange(b) {
   const period = b.unit?.offering?.product?.period;
   if (period === 'hour') return `${fmtDate(b.start)} · ${fmtTimeHM(b.start)}–${fmtTimeHM(b.end)}`;
   return `${fmtDate(b.start)} – ${fmtDate(bookingEndDisplay(b))}`;
+}
+
+// Day-first date entry. A native <input type="date"> renders in the browser's
+// locale (often mm/dd/yyyy); this ALWAYS shows and accepts dd.mm.yyyy while
+// storing the ISO yyyy-mm-dd string the forms use. `onChange` is called with
+// that ISO string (or '' when cleared). The calendar button opens the native
+// picker for convenience. Drop-in for `<input type="date">`.
+function DateField({ value, onChange, min, style, placeholder = 'kk.oo.yyyy' }) {
+  const nativeRef = React.useRef(null);
+  const toDisp = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+  };
+  const [text, setText] = React.useState(() => toDisp(value));
+  // Resync the visible text when the value changes from outside (prefill,
+  // seeded term on unit change, picker selection, etc.).
+  React.useEffect(() => { setText(toDisp(value)); }, [value]);
+
+  const parse = (raw) => {
+    const m = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(raw.trim());
+    if (!m) return null;
+    const d = +m[1], mo = +m[2], y = +m[3];
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    // Reject impossible dates (e.g. 31.02 rolls over to March).
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  };
+
+  const onText = (e) => {
+    const v = e.target.value;
+    setText(v);
+    if (v.trim() === '') { onChange(''); return; }
+    const iso = parse(v);
+    if (iso) onChange(iso);
+  };
+
+  const openPicker = () => {
+    const el = nativeRef.current;
+    if (!el) return;
+    if (typeof el.showPicker === 'function') { try { el.showPicker(); return; } catch (_) { /* fall through */ } }
+    el.focus();
+  };
+
+  return (
+    <div style={{ position: 'relative', ...style }}>
+      <input className="adm-input" value={text} onChange={onText}
+        onBlur={() => setText(toDisp(value))} placeholder={placeholder}
+        inputMode="numeric" style={{ width: '100%', paddingRight: 36 }} />
+      <button type="button" onClick={openPicker} aria-label="Kalendar" tabIndex={-1}
+        style={{ position: 'absolute', right: 8, top: 0, bottom: 0, margin: 'auto 0', height: 24, width: 24, background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--g-ink-4)', display: 'grid', placeItems: 'center' }}>
+        <IconCalendar size={16} />
+      </button>
+      {/* Visually-hidden native input drives the calendar popup + keeps min. */}
+      <input ref={nativeRef} type="date" value={value || ''} min={min || undefined}
+        onChange={(e) => onChange(e.target.value)} tabIndex={-1} aria-hidden="true"
+        style={{ position: 'absolute', right: 8, bottom: 0, width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
+    </div>
+  );
 }
 
 // ─── Initial datasets — replaced by api.bootstrap() before render ──
@@ -3186,11 +3245,11 @@ function BookingForm({ booking, onClose, onSave }) {
                   <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr' : '1fr 1fr', gap: 14 }}>
                     <div>
                       <Label>Boshlanish sanasi</Label>
-                      <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                      <DateField value={f.date} onChange={(v) => set('date', v)} />
                     </div>
                     <div>
                       <Label>Tugash sanasi</Label>
-                      <input className="adm-input" type="date" min={f.date || undefined} value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
+                      <DateField min={f.date || undefined} value={f.endDate} onChange={(v) => set('endDate', v)} />
                     </div>
                     {showQty && (
                       <div>
@@ -3248,11 +3307,11 @@ function BookingForm({ booking, onClose, onSave }) {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 8 }}>
                               <div>
                                 <Label>Boshlanish</Label>
-                                <input className="adm-input" type="date" value={it.start || ''} onChange={(e) => setExtra(i, 'start', e.target.value)} />
+                                <DateField value={it.start || ''} onChange={(v) => setExtra(i, 'start', v)} />
                               </div>
                               <div>
                                 <Label>Tugash</Label>
-                                <input className="adm-input" type="date" min={it.start || undefined} value={it.end || ''} onChange={(e) => setExtra(i, 'end', e.target.value)} />
+                                <DateField min={it.start || undefined} value={it.end || ''} onChange={(v) => setExtra(i, 'end', v)} />
                               </div>
                               <div>
                                 <Label>Narx/oy (ixtiyoriy)</Label>
@@ -3273,7 +3332,7 @@ function BookingForm({ booking, onClose, onSave }) {
                 <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Sana</Label>
-                    <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                    <DateField value={f.date} onChange={(v) => set('date', v)} />
                   </div>
                   <div>
                     <Label>Boshlanish</Label>
@@ -3297,11 +3356,11 @@ function BookingForm({ booking, onClose, onSave }) {
                 <div style={{ display: 'grid', gridTemplateColumns: showQty ? '1fr 1fr 1fr' : '1fr 1fr', gap: 14 }}>
                   <div>
                     <Label>Boshlanish sanasi</Label>
-                    <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+                    <DateField value={f.date} onChange={(v) => set('date', v)} />
                   </div>
                   <div>
                     <Label>Tugash sanasi</Label>
-                    <input className="adm-input" type="date" min={f.date || undefined} value={f.endDate} onChange={(e) => set('endDate', e.target.value)} />
+                    <DateField min={f.date || undefined} value={f.endDate} onChange={(v) => set('endDate', v)} />
                   </div>
                   {showQty && (
                     <div>
@@ -4793,7 +4852,7 @@ function PaymentForm({ bookingId, defaultAmount, onDone, onCancel }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
           <Label>Sana</Label>
-          <input className="adm-input" type="date" value={f.date} onChange={(e) => set('date', e.target.value)} />
+          <DateField value={f.date} onChange={(v) => set('date', v)} />
         </div>
         <div>
           <Label>Izoh (ixtiyoriy)</Label>
