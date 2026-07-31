@@ -3527,6 +3527,7 @@ function HostDetailDrawer({ h, onClose, onEdit }) {
               {h.super && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: `600 10px ${window.GO.font}`, color: 'var(--g-brand-ink)', background: 'var(--g-brand-soft)', padding: '3px 7px', borderRadius: 6 }}>★ Yulduz mezbon</span>}
             </div>
             <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>{h.org} · {h.city} · <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{h.id}</span></div>
+            {(full || h).phone && <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>+{(full || h).phone}</div>}
           </div>
           <IconBtn title="Xabar" style={{ border: '1px solid var(--g-line)' }}><IconMessage size={16} /></IconBtn>
         </div>
@@ -3594,8 +3595,8 @@ function HostDetailDrawer({ h, onClose, onEdit }) {
 function HostForm({ host, onClose, onSave }) {
   const isEdit = !!host;
   const [f, setF] = React.useState(() => host ? {
-    name: host.name, org: host.org, city: host.city, payout: host.payout,
-  } : { name: '', org: '', city: window.CITIES[0] || 'Toshkent', payout: 'UZCARD' });
+    name: host.name, org: host.org, city: host.city, payout: host.payout, phone: host.phone || '',
+  } : { name: '', org: '', city: window.CITIES[0] || 'Toshkent', payout: 'UZCARD', phone: '' });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
@@ -3629,11 +3630,18 @@ function HostForm({ host, onClose, onSave }) {
               <Label>Tashkilot / Kompaniya</Label>
               <input className="adm-input" value={f.org} onChange={(e) => set('org', e.target.value)} placeholder="AR Estate" />
             </div>
-            <div>
+            <div style={{ marginBottom: 14 }}>
               <Label>Shahar</Label>
               <select className="adm-select" style={{ width: '100%' }} value={f.city} onChange={(e) => set('city', e.target.value)}>
                 {window.CITIES.map((c) => <option key={c}>{c}</option>)}
               </select>
+            </div>
+            <div>
+              <Label>Telefon (ixtiyoriy)</Label>
+              <input className="adm-input" value={f.phone} onChange={(e) => set('phone', e.target.value)} placeholder="+998 90 123 45 67" />
+              <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 6 }}>
+                Qarzdorlik eslatmalari mezbonga ham yuborilishi uchun kerak (Sozlamalar → SMS). Bo'sh qoldirilsa, mezbonga xabar yuborilmaydi.
+              </div>
             </div>
           </Card>
           <Card>
@@ -4886,10 +4894,172 @@ function MoneyStatCard({ icon, label, value, unit = "so'm", color = 'var(--g-ink
   );
 }
 
+// ── Qarzdorlik → Eslatmalar ─────────────────────────────────
+// Dry run for the automated debtor SMS: exactly who would be texted, what
+// they'd be told, and what has actually gone out. Deliberately readable with
+// the feature switched OFF — that's the point of it.
+function RemindersPanel() {
+  const [data, setData] = React.useState(null);
+  const [log, setLog] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setErr(null);
+    try {
+      const [preview, messages] = await Promise.all([
+        api.get('/sms/reminders/preview'),
+        api.get('/sms/messages?kind=payment_reminder').catch(() => []),
+      ]);
+      setData(preview);
+      setLog(messages);
+    } catch (e) {
+      setErr(e?.message || 'Yuklab bo‘lmadi');
+    }
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  const runNow = async () => {
+    setBusy(true);
+    try {
+      await api.post('/sms/reminders/run', {});
+      // The sweep is a background job — give the worker a moment, then refresh.
+      await new Promise((r) => setTimeout(r, 2500));
+      await load();
+    } catch (e) {
+      setErr(e?.message || 'Ishga tushmadi');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (err) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div></Card>;
+  if (!data) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div></Card>;
+
+  const live = data.smsEnabled && data.remindersEnabled;
+  const sent = (log || []).filter((m) => m.status === 'sent').length;
+  const failed = (log || []).filter((m) => m.status === 'failed').length;
+
+  const columns = [
+    { key: 'cust', label: 'Mijoz', render: (r) => <PersonCell name={r.customer} sub={`+${r.phone}`} hue={nameHue(r.customer)} /> },
+    { key: 'place', label: 'Joy', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{r.building} · {r.unit}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1, fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</div>
+      </div>
+    ) },
+    { key: 'late', label: 'Kechikish', align: 'right', render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <div style={{ font: `700 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{r.daysOverdue} kun</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{fmtDate(r.overdueSince)} dan</div>
+      </div>
+    ) },
+    { key: 'stage', label: 'Bosqich', align: 'right', render: (r) => (
+      <span style={{
+        display: 'inline-block', padding: '3px 9px', borderRadius: 999, whiteSpace: 'nowrap',
+        font: `700 11.5px ${window.GO.font}`,
+        color: r.stage >= 14 ? 'oklch(0.45 0.17 25)' : r.stage >= 7 ? 'oklch(0.48 0.14 55)' : 'var(--g-ink-2)',
+        background: `color-mix(in oklch, oklch(0.6 0.16 ${r.stage >= 14 ? 25 : r.stage >= 7 ? 55 : 250}) 14%, transparent)`,
+      }}>{r.stage} kun</span>
+    ) },
+    { key: 'out', label: 'Qarz', align: 'right', render: (r) => (
+      <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', whiteSpace: 'nowrap' }}>
+        {window.fmtSom(r.outstanding)} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm</span>
+      </div>
+    ) },
+    { key: 'host', label: 'Mezbon', align: 'right', render: (r) => (
+      <span style={{ font: `400 12px ${window.GO.font}`, color: r.hostPhone ? 'var(--g-ink-3)' : 'var(--g-ink-4)', whiteSpace: 'nowrap' }}>
+        {r.hostPhone ? `+${r.hostPhone}` : '—'}
+      </span>
+    ) },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconMessage size={16} /></span>
+              <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Avtomatik to'lov eslatmalari</div>
+              <span style={{
+                padding: '3px 9px', borderRadius: 999, font: `700 11px ${window.GO.font}`,
+                color: live ? 'oklch(0.42 0.13 155)' : 'var(--g-ink-3)',
+                background: live ? 'color-mix(in oklch, oklch(0.6 0.14 155) 16%, transparent)' : 'var(--g-line)',
+              }}>{live ? 'YOQILGAN' : "O'CHIRILGAN"}</span>
+            </div>
+            <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 6, maxWidth: 620 }}>
+              {live
+                ? <>Har kuni 10:00 da tekshiriladi. Eslatma {(data.thresholds || []).join(' / ')} kun kechikkanda yuboriladi va to'lov kelishi bilan to'xtaydi.</>
+                : <>Hozir hech kimga SMS yuborilmaydi. Quyidagi ro'yxat — yoqilsa kim xabar olishi. <b>Sozlamalar → Platforma → SMS bildirishnomalari</b> bo'limidan yoqiladi.</>}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn kind="ghost" sm onClick={load} disabled={busy}><IconRefresh size={14} /> Yangilash</Btn>
+            <Btn kind="primary" sm onClick={runNow} disabled={busy}>{busy ? 'Ishlamoqda…' : 'Hozir tekshirish'}</Btn>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginTop: 18 }}>
+          <MiniStat label="Eslatma kutayotgan" value={String(data.count)} unit="ta" />
+          <MiniStat label="Jami qarz" value={window.fmtCompactSom(data.outstanding)} />
+          <MiniStat label="Yuborilgan" value={String(sent)} unit="ta" />
+          <MiniStat label="Xatolik" value={String(failed)} unit="ta" tone={failed ? 'bad' : undefined} />
+        </div>
+      </Card>
+
+      <DataTable
+        columns={columns}
+        rows={data.rows || []}
+        rowKey={(r) => r.bookingId}
+        empty={`Eslatma kerak bo'lgan ijarachi yo'q (eng kam qarz: ${window.fmtSom(data.minAmount || 0)} so'm)`}
+      />
+
+      {!!(log || []).length && (
+        <Card>
+          <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Yuborilgan xabarlar</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 340, overflowY: 'auto' }}>
+            {(log || []).slice(0, 50).map((m) => (
+              <div key={m.id} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', paddingBottom: 10, borderBottom: '1px solid var(--g-line)' }}>
+                <span style={{
+                  marginTop: 3, width: 7, height: 7, borderRadius: 999, flexShrink: 0,
+                  background: m.status === 'sent' ? 'oklch(0.6 0.14 155)' : m.status === 'failed' ? 'oklch(0.6 0.16 25)' : 'oklch(0.7 0.1 250)',
+                }} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{m.message}</div>
+                  <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>
+                    +{m.phone} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{m.bookingId || '—'}</span>
+                    {m.sentAt ? ` · ${fmtDate(m.sentAt)}` : ''}
+                    {m.status === 'failed' && <span style={{ color: 'oklch(0.5 0.16 25)' }}> · {m.error}</span>}
+                    {m.status === 'queued' && ' · navbatda'}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, unit, tone }) {
+  return (
+    <div>
+      <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{label}</div>
+      <div style={{ font: `700 19px ${window.GO.font}`, color: tone === 'bad' ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)', marginTop: 3 }}>
+        {value}{unit && <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}> {unit}</span>}
+      </div>
+    </div>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, debtorCount: 0 };
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
+  const [tab, setTab] = React.useState('list');
+  // Reminders are platform-only (they expose every host's tenants).
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
 
   let rows = data.rows || [];
   if (search) {
@@ -4922,6 +5092,22 @@ function DebtorsScreen({ search }) {
 
   return (
     <div>
+      {isPlatform && (
+        <div style={{ display: 'flex', gap: 4, marginBottom: 18, borderBottom: '1px solid var(--g-line)' }}>
+          {[{ id: 'list', label: 'Qarzdorlar' }, { id: 'reminders', label: 'Eslatmalar' }].map((t) => {
+            const on = tab === t.id;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{
+                padding: '11px 16px', border: 0, borderBottom: `2px solid ${on ? 'var(--g-brand)' : 'transparent'}`, cursor: 'pointer',
+                background: 'transparent', color: on ? 'var(--g-ink)' : 'var(--g-ink-3)', font: `600 13.5px ${window.GO.font}`, marginBottom: -1,
+              }}>{t.label}</button>
+            );
+          })}
+        </div>
+      )}
+
+      {tab === 'reminders' && isPlatform ? <RemindersPanel /> : (
+      <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 18 }}>
         <MoneyStatCard icon={<IconWarn size={17} />} label="Jami qarz" value={window.fmtCompactSom(totals.outstanding)} color="oklch(0.5 0.16 25)" />
         <MoneyStatCard icon={<IconUsers size={17} />} label="Qarzdorlar soni" value={String(totals.debtorCount)} unit="ta" />
@@ -4929,6 +5115,8 @@ function DebtorsScreen({ search }) {
       </div>
 
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} empty="Qarzdorlik yo'q 🎉" />
+      </>
+      )}
 
       <GoModal open={!!paying} onClose={() => setPaying(null)} title={paying ? `To'lov kiritish · ${paying.bookingId}` : ''}>
         {paying && (
@@ -5144,7 +5332,7 @@ function BookingMoneySections({ b }) {
           {contract === undefined ? muted('Yuklanmoqda…') : contract ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 11, background: 'var(--g-bg)' }}>
               <span style={{ color: 'var(--g-ink-3)', display: 'flex' }}><IconDoc size={17} /></span>
-              <span style={{ flex: 1, font: `600 13px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{contract.id}</span>
+              <span style={{ flex: 1, font: `600 13px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{contract.number}</span>
               <StatusPill s={contract.derivedStatus || contract.status} dict={window.CONTRACT_STATUS} size="sm" />
             </div>
           ) : (
@@ -5268,7 +5456,7 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
     setSoliqBusy(false);
   };
   const terminate = async () => {
-    const note = window.prompt(`${c.id} shartnomasini bekor qilasizmi? Bandlov ham bekor qilinadi. Izoh (ixtiyoriy):`);
+    const note = window.prompt(`${c.number} shartnomasini bekor qilasizmi? Bandlov ham bekor qilinadi. Izoh (ixtiyoriy):`);
     if (note === null) return;
     try {
       await api.post(`/contracts/${c.id}/terminate`, note.trim() ? { note: note.trim() } : {});
@@ -5282,7 +5470,7 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
           <div>
-            <div style={{ font: `700 16px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{c.id}</div>
+            <div style={{ font: `700 16px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{c.number}</div>
             <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Ijara shartnomasi</div>
           </div>
         </div>
@@ -5385,13 +5573,13 @@ function ContractsScreen({ search }) {
   let rows = all.filter((c) => status === 'all' || (c.derivedStatus || c.status) === status);
   if (search) {
     const q = search.toLowerCase();
-    rows = rows.filter((c) => `${c.id} ${c.bookingId} ${c.booking?.customer || ''} ${c.booking?.companyRef?.name || ''} ${c.booking?.unit?.name || ''} ${c.booking?.unit?.offering?.building?.name || ''}`.toLowerCase().includes(q));
+    rows = rows.filter((c) => `${c.number} ${c.bookingId} ${c.booking?.customer || ''} ${c.booking?.companyRef?.name || ''} ${c.booking?.unit?.name || ''} ${c.booking?.unit?.offering?.building?.name || ''}`.toLowerCase().includes(q));
   }
   const counts = { all: all.length };
   Object.keys(window.CONTRACT_STATUS).forEach((k) => counts[k] = all.filter((c) => (c.derivedStatus || c.status) === k).length);
 
   const columns = [
-    { key: 'id', label: '№', render: (c) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{c.id}</span> },
+    { key: 'id', label: '№', render: (c) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{c.number}</span> },
     { key: 'tenant', label: 'Ijarachi', render: (c) => (
       <PersonCell name={c.booking?.companyRef?.name || c.booking?.customer || '—'} sub={c.booking?.customer} hue={nameHue(c.booking?.companyRef?.name || c.booking?.customer)} />
     ) },
@@ -5653,9 +5841,22 @@ function PlatformTab() {
     smsEnabled: initN.smsEnabled ?? false,
     smsOnBookingApproved: initN.smsOnBookingApproved ?? true,
     smsOnBookingRejected: initN.smsOnBookingRejected ?? true,
+    smsOnPaymentReminder: initN.smsOnPaymentReminder ?? false,
+    paymentReminderDays: initN.paymentReminderDays ?? [3, 7, 14],
+    paymentReminderMinAmount: initN.paymentReminderMinAmount ?? 50000,
+    paymentReminderNotifyHost: initN.paymentReminderNotifyHost ?? false,
   });
   const tn = (k) => setN((p) => ({ ...p, [k]: !p[k] }));
-  const save = () => gorentMutate(() => api.put('/settings', { platform: s, notifications: n }));
+  const setN1 = (k, v) => setN((p) => ({ ...p, [k]: v }));
+  // "3, 7, 14" ⇄ [3,7,14]. Kept as free text while editing so a half-typed
+  // value doesn't fight the user; parsed on save.
+  const [daysText, setDaysText] = React.useState((initN.paymentReminderDays ?? [3, 7, 14]).join(', '));
+  const parsedDays = daysText.split(',').map((x) => parseInt(x.trim(), 10)).filter((x) => Number.isFinite(x) && x >= 0);
+  const daysValid = parsedDays.length > 0;
+  const save = () => gorentMutate(() => api.put('/settings', {
+    platform: s,
+    notifications: { ...n, paymentReminderDays: daysValid ? [...new Set(parsedDays)].sort((a, b) => a - b) : n.paymentReminderDays },
+  }));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <Card>
@@ -5712,12 +5913,62 @@ function PlatformTab() {
           <Row title="Bandlov tasdiqlanganda" sub="Bandlov tasdiqlanganda mijozga SMS yuboriladi.">
             <Toggle on={n.smsEnabled && n.smsOnBookingApproved} onClick={() => tn('smsOnBookingApproved')} />
           </Row>
-          <Row title="Bandlov bekor qilinganda" sub="Bandlov bekor qilinganda mijozga SMS yuboriladi." last>
+          <Row title="Bandlov bekor qilinganda" sub="Bandlov bekor qilinganda mijozga SMS yuboriladi.">
             <Toggle on={n.smsEnabled && n.smsOnBookingRejected} onClick={() => tn('smsOnBookingRejected')} />
           </Row>
+          <Row title="To'lov eslatmalari" sub="Muddati o'tgan ijarachilarga avtomatik SMS. Har kuni 10:00 da tekshiriladi." last={!n.smsOnPaymentReminder}>
+            <Toggle on={n.smsEnabled && n.smsOnPaymentReminder} onClick={() => tn('smsOnPaymentReminder')} />
+          </Row>
+          {n.smsOnPaymentReminder && (
+            <div style={{ padding: '14px 0 2px', borderTop: '1px solid var(--g-line)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+                <div>
+                  <FieldLabel>Eslatma kunlari (kechikish, kun)</FieldLabel>
+                  <input
+                    className="adm-input"
+                    value={daysText}
+                    onChange={(e) => setDaysText(e.target.value)}
+                    placeholder="3, 7, 14"
+                    style={daysValid ? undefined : { borderColor: 'oklch(0.6 0.16 25)' }}
+                  />
+                  <div style={{ font: `400 11.5px ${window.GO.font}`, color: daysValid ? 'var(--g-ink-4)' : 'oklch(0.5 0.16 25)', marginTop: 5 }}>
+                    {daysValid
+                      ? `Faqat eng katta bosqich yuboriladi — ${[...new Set(parsedDays)].sort((a, b) => a - b).join(' / ')} kun.`
+                      : "Kamida bitta kun kiriting (masalan: 3, 7, 14)."}
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>Eng kam qarz (so'm)</FieldLabel>
+                  <input
+                    className="adm-input"
+                    type="number"
+                    min={0}
+                    value={n.paymentReminderMinAmount}
+                    onChange={(e) => setN1('paymentReminderMinAmount', Math.max(0, Number(e.target.value) || 0))}
+                  />
+                  <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 5 }}>
+                    Bundan kichik qarz uchun SMS yuborilmaydi.
+                  </div>
+                </div>
+              </div>
+              <Row title="Mezbonga ham xabar berish" sub="Bino egasiga qarzdor haqida nusxa yuboriladi (mezbon telefoni kiritilgan bo'lsa)." last>
+                <Toggle on={n.paymentReminderNotifyHost} onClick={() => tn('paymentReminderNotifyHost')} />
+              </Row>
+            </div>
+          )}
         </div>
+        {n.smsEnabled && n.smsOnPaymentReminder && (
+          <div style={{
+            marginTop: 14, padding: '10px 12px', borderRadius: 10,
+            background: 'color-mix(in oklch, oklch(0.7 0.15 55) 10%, transparent)',
+            font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)',
+          }}>
+            Bu haqiqiy mijozlarga SMS yuboradi. Yoqishdan oldin <b>Qarzdorlik → Eslatmalar</b> bo'limida kimga
+            yuborilishini tekshiring.
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-          <Btn kind="primary" onClick={save}>O'zgarishlarni saqlash</Btn>
+          <Btn kind="primary" onClick={save} disabled={!daysValid}>O'zgarishlarni saqlash</Btn>
         </div>
       </Card>
     </div>
