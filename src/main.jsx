@@ -5023,20 +5023,26 @@ function BlacklistPanel() {
   if (!rows) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div></Card>;
 
   const columns = [
+    // An imported subject has no Company behind it — the printed name and tax
+    // id are all there is, so they carry the row.
     { key: 'who', label: 'Ijarachi', render: (r) => (
       <div style={{ minWidth: 0 }}>
         <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>
-          {r.company?.name || (r.phone ? `+${r.phone}` : '—')}
+          {r.company?.name || r.name || (r.phone ? `+${r.phone}` : '—')}
         </div>
         <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
-          {r.company ? window.taxLabel(r.company) : 'telefon bo‘yicha'}{r.company && r.phone ? ` · +${r.phone}` : ''}
+          {r.company ? window.taxLabel(r.company) : r.taxId ? `STIR/JSHSHIR ${r.taxId}` : 'telefon bo‘yicha'}
+          {r.phone ? ` · +${r.phone}` : ''}
+          {r.region ? ` · ${r.region}${r.district ? `, ${r.district}` : ''}` : ''}
         </div>
       </div>
     ) },
     { key: 'reason', label: 'Sabab', render: (r) => (
       <div style={{ minWidth: 0 }}>
         <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{r.reason}</div>
-        {r.note && <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.note}</div>}
+        {(r.note || r.source) && (
+          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.note || r.source}</div>
+        )}
       </div>
     ) },
     { key: 'amount', label: 'Qarz', align: 'right', render: (r) => (
@@ -5063,9 +5069,12 @@ function BlacklistPanel() {
 
   return (
     <div>
+      <BlacklistImport onDone={load} />
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
         <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
-          Bu ijarachilarga yangi bandlov yaratib bo‘lmaydi. Qo‘shish uchun «Sobiq ijarachilar» ro‘yxatidan foydalaning.
+          Bu ijarachilarga yangi bandlov yaratib bo‘lmaydi. Qo‘shish uchun «Sobiq ijarachilar» ro‘yxatidan
+          yoki yuqoridagi CSV importdan foydalaning.
         </div>
         <label style={{ display: 'flex', gap: 7, alignItems: 'center', cursor: 'pointer', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>
           <input type="checkbox" checked={showLifted} onChange={(e) => setShowLifted(e.target.checked)} />
@@ -5078,6 +5087,101 @@ function BlacklistPanel() {
         {lifting && <LiftBlacklistForm entry={lifting} onCancel={() => setLifting(null)} onDone={async () => { setLifting(null); await load(); }} />}
       </GoModal>
     </div>
+  );
+}
+
+// Bulk import of the official risky-taxpayer list (soliq's table, saved from
+// Excel as CSV). Always previews first: these files run to thousands of rows,
+// and the operator should see the count and the rejects before anything lands.
+function BlacklistImport({ onDone }) {
+  const [file, setFile] = React.useState(null);
+  const [source, setSource] = React.useState('');
+  const [preview, setPreview] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const inputRef = React.useRef(null);
+
+  const qs = (dryRun) => {
+    const q = new URLSearchParams();
+    if (dryRun) q.set('dryRun', 'true');
+    if (source.trim()) q.set('source', source.trim());
+    return q.toString();
+  };
+
+  const pick = async (f) => {
+    setFile(f); setPreview(null); setErr(null);
+    if (!f) return;
+    setBusy(true);
+    try { setPreview(await api.upload(`/blacklist/import?${qs(true)}`, f)); }
+    catch (e) { setErr(e?.message || 'Faylni o‘qib bo‘lmadi'); }
+    finally { setBusy(false); }
+  };
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const res = await api.upload(`/blacklist/import?${qs(false)}`, file);
+      setFile(null); setPreview(null);
+      if (inputRef.current) inputRef.current.value = '';
+      onDone(res);
+    } catch (e) { setErr(e?.message || 'Import bajarilmadi'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+        <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconDoc size={16} /></span>
+        <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)' }}>Ro'yxatni CSV dan yuklash</div>
+      </div>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 12 }}>
+        Ustunlar: <b>Вилоят · Туман · СТИР/ЖШШИР · Субъект номи</b> (lotincha sarlavhalar ham bo'ladi).
+        Allaqachon ro'yxatdagilar takrorlanmaydi.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div>
+          <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>CSV fayl</div>
+          <input ref={inputRef} type="file" accept=".csv,text/csv,text/plain"
+            onChange={(e) => pick(e.target.files?.[0] || null)} style={{ font: `400 12.5px ${window.GO.font}` }} />
+        </div>
+        <div>
+          <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Manba (ixtiyoriy)</div>
+          <input className="adm-input" value={source} onChange={(e) => setSource(e.target.value)}
+            placeholder="Soliq ro'yxati 10.11.2025" />
+        </div>
+      </div>
+
+      {err && <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+
+      {preview && (
+        <div style={{ padding: '12px 14px', borderRadius: 10, background: 'var(--g-surface-2, oklch(0.97 0.005 250))', border: '1px solid var(--g-line)' }}>
+          <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+            <span>O'qildi: <b>{preview.parsed}</b></span>
+            <span style={{ color: 'oklch(0.45 0.15 25)' }}>Qo'shiladi: <b>{preview.created}</b></span>
+            <span style={{ color: 'var(--g-ink-3)' }}>Takror: <b>{preview.skipped}</b></span>
+            <span style={{ color: preview.invalid ? 'oklch(0.48 0.14 55)' : 'var(--g-ink-3)' }}>Xato satr: <b>{preview.invalid}</b></span>
+            {!!preview.matchedCompanies && <span style={{ color: 'oklch(0.45 0.12 155)' }}>Mavjud ijarachi: <b>{preview.matchedCompanies}</b></span>}
+          </div>
+          {!!preview.invalidRows?.length && (
+            <div style={{ marginTop: 8, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              {preview.invalidRows.slice(0, 5).map((r) => <div key={r.line}>satr {r.line}: {r.reason}</div>)}
+              {preview.invalidRows.length > 5 && <div>…yana {preview.invalidRows.length - 5} ta</div>}
+            </div>
+          )}
+          {!!preview.sample?.length && (
+            <div style={{ marginTop: 8, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              Masalan: {preview.sample.slice(0, 3).map((s) => `${s.name || s.taxId} (${s.taxId})`).join(' · ')}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+            <Btn kind="primary" sm disabled={busy || !preview.created} onClick={run}>
+              {busy ? 'Yuklanmoqda…' : `${preview.created} ta yozuvni qo'shish`}
+            </Btn>
+          </div>
+        </div>
+      )}
+      {busy && !preview && <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>O'qilmoqda…</div>}
+    </Card>
   );
 }
 
