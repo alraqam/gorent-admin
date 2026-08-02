@@ -3111,12 +3111,39 @@ function BookingForm({ booking, onClose, onSave }) {
     return next;
   });
 
+  // Blacklist check on whoever this booking now points at. Debounced because
+  // it re-runs as the phone is typed. A failed check never blocks the form —
+  // the API refuses the booking anyway, so a warning we couldn't fetch must
+  // not stop legitimate work.
+  const [bl, setBl] = React.useState(null);
+  const [blConfirmed, setBlConfirmed] = React.useState(false);
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
+  const blPhone = f.phone.trim();
+  React.useEffect(() => {
+    setBlConfirmed(false);
+    if (!f.companyId && blPhone.replace(/\D/g, '').length < 9) { setBl(null); return; }
+    let dead = false;
+    const t = setTimeout(async () => {
+      const q = new URLSearchParams();
+      if (f.companyId) q.set('companyId', f.companyId);
+      if (blPhone) q.set('phone', blPhone);
+      try {
+        const res = await api.get(`/blacklist/check?${q.toString()}`);
+        if (!dead) setBl(res);
+      } catch { if (!dead) setBl(null); }
+    }, 350);
+    return () => { dead = true; clearTimeout(t); };
+  }, [f.companyId, blPhone]);
+  // Host: hard stop. Platform: stop until they tick the confirmation.
+  const blStops = !!(bl && bl.blocked && (!isPlatform || !blConfirmed));
+
   // Same validation for create and edit — dates/term/company are now editable.
-  const canSubmit = !!(f.customer.trim() && unit && startDt
+  const canSubmit = !!(f.customer.trim() && unit && startDt && !blStops
     && (period === 'month' ? (term && f.companyId && allItemsValid) : (endDt && endDt > startDt)));
   // Why Save is disabled — surfaced so it's never a dead button.
   let disabledReason = '';
-  if (!f.customer.trim()) disabledReason = 'Mijoz ismini kiriting';
+  if (blStops) disabledReason = isPlatform ? "Qora ro'yxatni tasdiqlang" : "Ijarachi qora ro'yxatda";
+  else if (!f.customer.trim()) disabledReason = 'Mijoz ismini kiriting';
   else if (!unit) disabledReason = 'Birlik tanlang';
   else if (period === 'month') {
     if (!f.date || !f.endDate) disabledReason = "Sana oralig'ini tanlang";
@@ -3149,6 +3176,7 @@ function BookingForm({ booking, onClose, onSave }) {
         payload = {
           items, customer: f.customer.trim(), phone: f.phone.trim(),
           companyId: f.companyId, start: mStart.toISOString(), end: mEndExcl.toISOString(),
+          ...(blConfirmed ? { overrideBlacklist: true } : {}),
         };
       } else {
         const pr = priceNum(f.price);
@@ -3157,6 +3185,7 @@ function BookingForm({ booking, onClose, onSave }) {
           start: startDt.toISOString(), end: endDt.toISOString(), qty: effectiveQty,
           ...(f.companyId ? { companyId: f.companyId } : {}),
           ...(pr != null ? { price: pr } : {}),
+          ...(blConfirmed ? { overrideBlacklist: true } : {}),
         };
       }
       if (isEdit) await api.patch(`/bookings/${booking.id}`, payload);
@@ -3221,6 +3250,32 @@ function BookingForm({ booking, onClose, onSave }) {
                 </div>
               )}
             </div>
+
+            {/* Blacklist hit. A host sees why and stops here; a platform
+                operator can proceed, but only by saying so out loud. */}
+            {bl && bl.blocked && (
+              <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, background: 'oklch(0.96 0.03 25)', border: '1px solid oklch(0.82 0.11 25)' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `700 13px ${window.GO.font}`, color: 'oklch(0.45 0.17 25)' }}>
+                  <IconWarn size={16} /> Ijarachi qora ro'yxatda
+                </div>
+                {bl.entries.map((e) => (
+                  <div key={e.id} style={{ marginTop: 6, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.42 0.12 25)' }}>
+                    {e.company?.name || e.phone} — {e.reason}
+                    {e.note && <span style={{ color: 'var(--g-ink-4)', fontWeight: 400 }}> · {e.note}</span>}
+                  </div>
+                ))}
+                {isPlatform ? (
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, cursor: 'pointer', font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+                    <input type="checkbox" checked={blConfirmed} onChange={(e) => setBlConfirmed(e.target.checked)} />
+                    Ogohlantirishni ko'rdim, baribir bandlov yarataman
+                  </label>
+                ) : (
+                  <div style={{ marginTop: 8, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+                    Bandlov yaratish uchun platforma operatoriga murojaat qiling.
+                  </div>
+                )}
+              </div>
+            )}
           </Card>
 
           {(
@@ -4323,6 +4378,14 @@ function CompaniesScreen({ search }) {
         <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', display: 'flex', alignItems: 'center', gap: 7 }}>
           {c.name}
           {c.type === 'individual' && <span style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.5 0.1 200)', background: 'oklch(0.95 0.03 200)', padding: '1px 6px', borderRadius: 5 }}>YaTT</span>}
+          {/* Excluded tenants are hidden from the invoice screens, so this is
+              the one place the decision stays visible. */}
+          {c.ediExempt && (
+            <span
+              title={c.ediExemptReason || 'ESF yaratilmaydi'}
+              style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.48 0.14 55)', background: 'oklch(0.95 0.05 55)', padding: '1px 6px', borderRadius: 5 }}
+            >ESF yo‘q</span>
+          )}
         </div>
         <div style={{ font: `400 12px ui-monospace, monospace`, color: 'var(--g-ink-4)' }}>{window.taxLabel(c) || '—'}</div>
       </div>
@@ -4349,7 +4412,8 @@ function CompanyForm({ company, onClose }) {
     name: company.name, type: company.type || 'business', inn: company.inn || '', pinfl: company.pinfl || '',
     phones: company.phones?.length ? company.phones : [''],
     directorPassport: company.directorPassport || '', guvohnoma: company.guvohnoma || '',
-  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '' });
+    ediExempt: !!company.ediExempt, ediExemptReason: company.ediExemptReason || '',
+  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '', ediExempt: false, ediExemptReason: '' });
   const [files, setFiles] = React.useState({ passport: null, guvohnoma: null });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -4374,6 +4438,8 @@ function CompanyForm({ company, onClose }) {
         phones: f.phones.map((p) => p.trim()).filter(Boolean),
         directorPassport: f.directorPassport.trim() || null,
         guvohnoma: f.guvohnoma.trim() || null,
+        ediExempt: f.ediExempt,
+        ediExemptReason: f.ediExempt ? (f.ediExemptReason.trim() || null) : null,
       };
       const saved = isEdit ? await api.patch(`/companies/${company.id}`, payload) : await api.post('/companies', payload);
       if (files.passport) await api.upload(`/companies/${saved.id}/files/passport`, files.passport);
@@ -4484,6 +4550,39 @@ function CompanyForm({ company, onClose }) {
           </div>
         </Card>
 
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 4 }}>Elektron hujjat aylanishi</div>
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 12 }}>
+            didox / soliq bilan avtomatik hujjat almashinuvi.
+          </div>
+          <Row
+            title="ESF yaratilmasin"
+            sub="Bu ijarachining bandlovlari uchun oylik hisob-faktura (ESF) yaratilmaydi va didox'ga yuborilmaydi."
+            last={!f.ediExempt}
+          >
+            <Toggle on={f.ediExempt} onClick={() => set('ediExempt', !f.ediExempt)} />
+          </Row>
+          {f.ediExempt && (
+            <div style={{ paddingTop: 12 }}>
+              <Label>Sababi</Label>
+              <input
+                className="adm-input"
+                value={f.ediExemptReason}
+                onChange={(e) => set('ediExemptReason', e.target.value)}
+                placeholder="Masalan: naqd to‘lov, ESF talab qilinmaydi"
+              />
+              <div style={{
+                marginTop: 10, padding: '9px 12px', borderRadius: 9,
+                background: 'color-mix(in oklch, oklch(0.7 0.15 55) 12%, transparent)',
+                font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-2)',
+              }}>
+                Ijara hisoblanishi davom etadi — ijarachi «Qarzdorlik» ro‘yxatida qoladi va
+                to‘lov eslatmalarini oladi. Faqat ESF yaratilmaydi.
+              </div>
+            </div>
+          )}
+        </Card>
+
         <div style={{ display: 'flex', gap: 10 }}>
           <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={submit} disabled={busy}><IconCheck size={16} /> {busy ? 'Saqlanmoqda…' : window.AT.save}</Btn>
           <Btn kind="ghost" style={{ justifyContent: 'center' }} onClick={onClose}>{window.AT.cancel}</Btn>
@@ -4569,11 +4668,20 @@ function InvoicesScreen({ search }) {
     if (!list.length) return;
     setSigningIds(new Set(list.map((inv) => inv.id)));
     try {
-      const available = await eimzo.isAvailable();
-      if (!available) throw new Error("E-IMZO agenti topilmadi. E-IMZO dasturini ishga tushiring va qaytadan urinib ko'ring.");
+      // Ask for the certificates directly rather than probing isAvailable():
+      // the boolean collapses "agent not running" and "this domain has no
+      // E-IMZO API key" into one message, and the second is by far the more
+      // likely — and the one the operator can actually act on.
       const certs = await eimzo.listCertificates();
       if (!certs.length) throw new Error("E-IMZO sertifikatlari topilmadi.");
-      const cert = certs[0];
+      // An ESF must be signed by the SELLER's own key. Taking certs[0] picked
+      // whichever certificate E-IMZO listed first — on a machine holding
+      // several keys that is usually somebody's personal certificate, not the
+      // company's. Match on the STIR the invoices are issued under.
+      const { stir } = await api.get('/didox/status');
+      if (!stir) throw new Error("Kompaniya STIR sozlanmagan (DIDOX_STIR) — imzolash mumkin emas.");
+      const picked = eimzo.pickCertificate(certs, stir);
+      const cert = picked.raw;
       const failures = [];
       for (const inv of list) {
         try {
@@ -4894,6 +5002,161 @@ function MoneyStatCard({ icon, label, value, unit = "so'm", color = 'var(--g-ink
   );
 }
 
+// ── Qarzdorlik → Qora ro'yxat ───────────────────────────────
+// Tenants we will not rent to again. Entries are never deleted: lifting one
+// keeps the row so the history of who was blocked, why, and who cleared them
+// survives the people involved.
+function BlacklistPanel() {
+  const [rows, setRows] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [showLifted, setShowLifted] = React.useState(false);
+  const [lifting, setLifting] = React.useState(null); // entry → lift modal
+
+  const load = React.useCallback(async () => {
+    setErr(null);
+    try { setRows(await api.get(`/blacklist${showLifted ? '?all=true' : ''}`)); }
+    catch (e) { setErr(e?.message || 'Yuklab bo‘lmadi'); }
+  }, [showLifted]);
+  React.useEffect(() => { load(); }, [load]);
+
+  if (err) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div></Card>;
+  if (!rows) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div></Card>;
+
+  const columns = [
+    { key: 'who', label: 'Ijarachi', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+          {r.company?.name || (r.phone ? `+${r.phone}` : '—')}
+        </div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+          {r.company ? window.taxLabel(r.company) : 'telefon bo‘yicha'}{r.company && r.phone ? ` · +${r.phone}` : ''}
+        </div>
+      </div>
+    ) },
+    { key: 'reason', label: 'Sabab', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{r.reason}</div>
+        {r.note && <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.note}</div>}
+      </div>
+    ) },
+    { key: 'amount', label: 'Qarz', align: 'right', render: (r) => (
+      r.amount ? <MoneyCell n={r.amount} /> : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
+    ) },
+    { key: 'when', label: 'Qo‘shilgan', align: 'right', render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{fmtDate(r.createdAt)}</div>
+        {r.createdBy && <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.createdBy}</div>}
+      </div>
+    ) },
+    { key: 'act', label: '', align: 'right', render: (r) => (
+      <div onClick={(e) => e.stopPropagation()}>
+        {r.liftedAt ? (
+          <span title={r.liftReason || ''} style={{ font: `600 11.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)', whiteSpace: 'nowrap' }}>
+            {fmtDate(r.liftedAt)} da bekor qilingan
+          </span>
+        ) : (
+          <Btn kind="ghost" sm onClick={() => setLifting(r)}>Ro'yxatdan chiqarish</Btn>
+        )}
+      </div>
+    ) },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
+        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+          Bu ijarachilarga yangi bandlov yaratib bo‘lmaydi. Qo‘shish uchun «Sobiq ijarachilar» ro‘yxatidan foydalaning.
+        </div>
+        <label style={{ display: 'flex', gap: 7, alignItems: 'center', cursor: 'pointer', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={showLifted} onChange={(e) => setShowLifted(e.target.checked)} />
+          Bekor qilinganlar ham
+        </label>
+      </div>
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty="Qora ro'yxat bo'sh" />
+
+      <GoModal open={!!lifting} onClose={() => setLifting(null)} title="Qora ro'yxatdan chiqarish">
+        {lifting && <LiftBlacklistForm entry={lifting} onCancel={() => setLifting(null)} onDone={async () => { setLifting(null); await load(); }} />}
+      </GoModal>
+    </div>
+  );
+}
+
+function LiftBlacklistForm({ entry, onDone, onCancel }) {
+  const [reason, setReason] = React.useState('');
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setErr(null); setBusy(true);
+    try {
+      await api.post(`/blacklist/${entry.id}/lift`, reason.trim() ? { reason: reason.trim() } : {});
+      onDone();
+    } catch (e) { setErr(e?.message || 'Xatolik'); setBusy(false); }
+  };
+  return (
+    <div>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 14 }}>
+        <b>{entry.company?.name || `+${entry.phone}`}</b> yana bandlov yarata oladi. Yozuv tarixda saqlanib qoladi.
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Sabab</div>
+        <input className="adm-input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Qarz to'landi" />
+      </div>
+      {err && <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn kind="ghost" sm onClick={onCancel}>{window.AT.cancel}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy}>{busy ? 'Saqlanmoqda…' : 'Chiqarish'}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// Add a former tenant to the blacklist, prefilled from their debt row.
+function BlacklistForm({ row, onDone, onCancel }) {
+  const [f, setF] = React.useState({ reason: '', note: '' });
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const canSubmit = f.reason.trim().length >= 3;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setErr(null); setBusy(true);
+    try {
+      await api.post('/blacklist', {
+        // Both identities, so the same person can't return under a new company.
+        ...(row.company?.id ? { companyId: row.company.id } : {}),
+        ...(row.phone ? { phone: row.phone } : {}),
+        reason: f.reason.trim(),
+        ...(f.note.trim() ? { note: f.note.trim() } : {}),
+        ...(row.outstanding > 0 ? { amount: row.outstanding } : {}),
+      });
+      onDone();
+    } catch (e) { setErr(e?.message || 'Xatolik'); setBusy(false); }
+  };
+
+  return (
+    <div>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 14 }}>
+        <b>{row.company?.name || row.customer}</b>{row.phone ? ` · +${row.phone}` : ''} — yangi bandlov yaratish taqiqlanadi.
+        {row.outstanding > 0 && <> Qarz: <b>{window.fmtSom(row.outstanding)} so'm</b>.</>}
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Sabab</div>
+        <input className="adm-input" value={f.reason} onChange={(e) => set('reason', e.target.value)} placeholder="Qarzini to'lamay chiqib ketgan" />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Izoh (sud ishi raqami va h.k.)</div>
+        <input className="adm-input" value={f.note} onChange={(e) => set('note', e.target.value)} placeholder="—" />
+      </div>
+      {err && <div style={{ marginBottom: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Btn kind="ghost" sm onClick={onCancel}>{window.AT.cancel}</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={busy || !canSubmit}>{busy ? 'Saqlanmoqda…' : "Qora ro'yxatga qo'shish"}</Btn>
+      </div>
+    </div>
+  );
+}
+
 // ── Qarzdorlik → Eslatmalar ─────────────────────────────────
 // Dry run for the automated debtor SMS: exactly who would be texted, what
 // they'd be told, and what has actually gone out. Deliberately readable with
@@ -5054,18 +5317,23 @@ function MiniStat({ label, value, unit, tone }) {
 }
 
 function DebtorsScreen({ search }) {
-  const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, debtorCount: 0 }, rows: [] };
-  const totals = data.totals || { outstanding: 0, prepaid: 0, debtorCount: 0 };
+  const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 }, rows: [] };
+  const totals = data.totals || { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 };
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
-  const [tab, setTab] = React.useState('list');
+  const [blacklisting, setBlacklisting] = React.useState(null); // former debtor → blacklist modal
+  // Two separate collection problems, never mixed: tenants still in the space
+  // (chase with a reminder) and tenants who left owing money (a legal matter).
+  const [tab, setTab] = React.useState('current');
   // Reminders are platform-only (they expose every host's tenants).
   const isPlatform = (api.currentUser() || {}).role === 'platform';
+  const former = tab === 'former';
 
-  let rows = data.rows || [];
+  let rows = (data.rows || []).filter((r) => (r.group === 'former') === former);
   if (search) {
     const q = search.toLowerCase();
     rows = rows.filter((r) => `${r.customer} ${r.company?.name || ''} ${r.building} ${r.unit}`.toLowerCase().includes(q));
   }
+  const groupTotals = (former ? totals.former : totals.current) || { outstanding: 0, count: 0, maxDaysOverdue: 0 };
 
   const columns = [
     { key: 'cust', label: 'Mijoz', render: (r) => (
@@ -5077,14 +5345,54 @@ function DebtorsScreen({ search }) {
         <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.product} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</span></div>
       </div>
     ) },
-    { key: 'period', label: 'Muddat', render: (r) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{fmtDate(r.start)} – {fmtDate(r.end)}</span> },
-    { key: 'expected', label: 'Kutilgan', align: 'right', render: (r) => <MoneyCell n={r.expected} /> },
+    { key: 'period', label: former ? 'Ijara muddati' : 'Muddat', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{fmtDate(r.start)} – {fmtDate(r.end)}</span>
+        {former && r.bookingStatus === 'cancelled' && (
+          <div style={{ font: `500 11.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 1 }}>shartnoma bekor qilingan</div>
+        )}
+      </div>
+    ) },
+    // How long the money has been owed, counted from the invoice date. Shown
+    // only for former tenants: it is the figure a claim is built on.
+    ...(former ? [{ key: 'overdue', label: 'Kechikish', align: 'right', render: (r) => (
+      r.daysOverdue > 0
+        ? <div style={{ whiteSpace: 'nowrap' }}>
+            <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{r.daysOverdue} kun</div>
+            {r.overdueSince && <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{fmtDate(r.overdueSince)} dan</div>}
+          </div>
+        : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
+    ) }] : []),
+    // "Kutilgan" is what has been INVOICED. Rent that has accrued but has not
+    // been billed yet hangs underneath it, so it is visible without being
+    // counted as debt the tenant has been asked to pay.
+    { key: 'expected', label: 'Hisob-faktura qilingan', align: 'right', render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <MoneyCell n={r.expected} />
+        {/* An EDI-exempt tenant is billed on paper, so their figure is the
+            accrued rent — say so, or the column header lies about it. */}
+        {r.company?.ediExempt
+          ? <div title="Ijarachi ESF dan chiqarilgan — hisob-faktura o'rniga hisoblangan ijara" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+              hisoblangan (ESF yo'q)
+            </div>
+          : r.uninvoiced > 0 && (
+            <div title="Hisoblangan, lekin hali hisob-faktura qilinmagan" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+              +{window.fmtSom(r.uninvoiced)} hisoblanmoqda
+            </div>
+          )}
+      </div>
+    ) },
     { key: 'paid', label: "To'langan", align: 'right', render: (r) => <MoneyCell n={r.paid} /> },
     { key: 'outstanding', label: 'Qoldiq', align: 'right', render: (r) => r.outstanding > 0
       ? <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', whiteSpace: 'nowrap' }}>{window.fmtSom(r.outstanding)} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm</span></div>
       : <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)', whiteSpace: 'nowrap' }}>{window.fmtSom(Math.abs(r.outstanding))} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm oldindan</span></div> },
     { key: 'act', label: '', align: 'right', render: (r) => (
-      <div onClick={(e) => e.stopPropagation()}>
+      <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        {/* Blocking a tenant is a platform decision, and only makes sense for
+            someone who has already left owing money. */}
+        {former && isPlatform && r.outstanding > 0 && (
+          <Btn kind="ghost" sm onClick={() => setBlacklisting(r)}>Qora ro'yxatga</Btn>
+        )}
         <Btn kind="primary" sm onClick={() => setPaying(r)}><IconPlus size={14} /> To'lov kiritish</Btn>
       </div>
     ) },
@@ -5092,9 +5400,13 @@ function DebtorsScreen({ search }) {
 
   return (
     <div>
-      {isPlatform && (
+      {(
         <div style={{ display: 'flex', gap: 4, marginBottom: 18, borderBottom: '1px solid var(--g-line)' }}>
-          {[{ id: 'list', label: 'Qarzdorlar' }, { id: 'reminders', label: 'Eslatmalar' }].map((t) => {
+          {[
+            { id: 'current', label: `Joriy ijarachilar${totals.current?.count ? ` · ${totals.current.count}` : ''}` },
+            { id: 'former', label: `Sobiq ijarachilar${totals.former?.count ? ` · ${totals.former.count}` : ''}` },
+            ...(isPlatform ? [{ id: 'reminders', label: 'Eslatmalar' }, { id: 'blacklist', label: "Qora ro'yxat" }] : []),
+          ].map((t) => {
             const on = tab === t.id;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -5106,17 +5418,41 @@ function DebtorsScreen({ search }) {
         </div>
       )}
 
-      {tab === 'reminders' && isPlatform ? <RemindersPanel /> : (
+      {tab === 'blacklist' && isPlatform ? <BlacklistPanel /> :
+       tab === 'reminders' && isPlatform ? <RemindersPanel /> : (
       <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 18 }}>
-        <MoneyStatCard icon={<IconWarn size={17} />} label="Jami qarz" value={window.fmtCompactSom(totals.outstanding)} color="oklch(0.5 0.16 25)" />
-        <MoneyStatCard icon={<IconUsers size={17} />} label="Qarzdorlar soni" value={String(totals.debtorCount)} unit="ta" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
+        <MoneyStatCard icon={<IconWarn size={17} />} label={former ? 'Undirilmagan qarz' : 'Jami qarz'} value={window.fmtCompactSom(groupTotals.outstanding)} color="oklch(0.5 0.16 25)" />
+        <MoneyStatCard icon={<IconUsers size={17} />} label="Qarzdorlar soni" value={String(groupTotals.count)} unit="ta" />
+        {former
+          // For a former tenant the age of the debt is what matters (limitation
+          // periods, escalation), not rent that has yet to be billed.
+          ? <MoneyStatCard icon={<IconClock size={17} />} label="Eng eski qarz" value={String(groupTotals.maxDaysOverdue || 0)} unit="kun" />
+          /* Accrued but not yet billed — becomes debt at the month-end run. */
+          : <MoneyStatCard icon={<IconDoc size={17} />} label="Hisob-faktura kutilmoqda" value={window.fmtCompactSom(totals.uninvoiced || 0)} />}
         <MoneyStatCard icon={<IconWallet size={17} />} label="Oldindan to'lovlar" value={window.fmtCompactSom(totals.prepaid)} color="oklch(0.5 0.13 155)" />
       </div>
 
-      <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} empty="Qarzdorlik yo'q 🎉" />
+      {former && (
+        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', margin: '-4px 0 14px' }}>
+          Ijara muddati tugagan yoki bekor qilingan, lekin qarzi qolgan ijarachilar — yuridik ish yuritish uchun.
+        </div>
+      )}
+
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId}
+        empty={former ? "Sobiq ijarachilarda qarz yo'q 🎉" : "Qarzdorlik yo'q 🎉"} />
       </>
       )}
+
+      <GoModal open={!!blacklisting} onClose={() => setBlacklisting(null)} title="Qora ro'yxatga qo'shish">
+        {blacklisting && (
+          <BlacklistForm
+            row={blacklisting}
+            onCancel={() => setBlacklisting(null)}
+            onDone={() => { setBlacklisting(null); setTab('blacklist'); }}
+          />
+        )}
+      </GoModal>
 
       <GoModal open={!!paying} onClose={() => setPaying(null)} title={paying ? `To'lov kiritish · ${paying.bookingId}` : ''}>
         {paying && (
@@ -5836,6 +6172,18 @@ function PlatformTab() {
   });
   const set = (k, v) => setS((p) => ({ ...p, [k]: v }));
   const t = (k) => setS((p) => ({ ...p, [k]: !p[k] }));
+  // Seller tax profile — decides whether every ESF carries VAT.
+  const initCo = (window.SETTINGS && window.SETTINGS.company) || {};
+  const [co, setCo] = React.useState({
+    vatPayer: initCo.vatPayer ?? false,
+    vatRate: initCo.vatRate ?? 12,
+    vatRegCode: initCo.vatRegCode ?? '',
+    vatRegStatus: initCo.vatRegStatus ?? 0,
+  });
+  const [registry, setRegistry] = React.useState(null); // what didox reports
+  React.useEffect(() => {
+    api.get('/settings/company-tax').then((r) => setRegistry(r.registry)).catch(() => setRegistry(null));
+  }, []);
   const initN = (window.SETTINGS && window.SETTINGS.notifications) || {};
   const [n, setN] = React.useState({
     smsEnabled: initN.smsEnabled ?? false,
@@ -5855,6 +6203,7 @@ function PlatformTab() {
   const daysValid = parsedDays.length > 0;
   const save = () => gorentMutate(() => api.put('/settings', {
     platform: s,
+    company: { ...co, vatRate: Number(co.vatRate) || 12, vatRegCode: co.vatPayer ? co.vatRegCode.trim() : '' },
     notifications: { ...n, paymentReminderDays: daysValid ? [...new Set(parsedDays)].sort((a, b) => a - b) : n.paymentReminderDays },
   }));
   return (
@@ -5900,6 +6249,50 @@ function PlatformTab() {
           <Toggle on={s.maintenance} onClick={() => t('maintenance')} />
         </Row>
       </Card>
+      <Card>
+        <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Soliq (NDS)</div>
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 2px' }}>
+          Kompaniyangizning QQS (NDS) holati. Hisob-fakturalar shunga qarab yaratiladi.
+        </div>
+        <Row title="NDS to'lovchisi" sub="Yoqilsa, har bir ESF qatorida NDS ajratiladi. O'chirilsa — «NDSsiz»." last={!co.vatPayer}>
+          <Toggle on={co.vatPayer} onClick={() => setCo((p) => ({ ...p, vatPayer: !p.vatPayer }))} />
+        </Row>
+        {co.vatPayer && (
+          <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 18, padding: '14px 0 2px', borderTop: '1px solid var(--g-line)' }}>
+            <div>
+              <FieldLabel>NDS stavkasi (%)</FieldLabel>
+              <input className="adm-input" type="number" min={0} max={100} value={co.vatRate}
+                onChange={(e) => setCo((p) => ({ ...p, vatRate: e.target.value }))} />
+            </div>
+            <div>
+              <FieldLabel>NDS ro'yxat raqami</FieldLabel>
+              <input className="adm-input" value={co.vatRegCode}
+                onChange={(e) => setCo((p) => ({ ...p, vatRegCode: e.target.value }))} placeholder="326040002521" />
+            </div>
+          </div>
+        )}
+        {/* Independent check: what the tax registry says, via didox. A mismatch
+            here means every invoice would carry a tax that isn't owed. */}
+        {registry && (
+          <div style={{
+            marginTop: 12, padding: '10px 12px', borderRadius: 10,
+            font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)',
+            background: (co.vatPayer && !registry.vatRegCode)
+              ? 'color-mix(in oklch, oklch(0.65 0.18 25) 13%, transparent)'
+              : 'var(--g-bg)',
+          }}>
+            {registry.vatRegCode
+              ? <>Soliq reyestri: NDS raqami <b>{registry.vatRegCode}</b>{registry.vatRegStatus ? ` · ${registry.vatRegStatus}` : ''}</>
+              : <>Soliq reyestri: bu STIR uchun NDS ro'yxati topilmadi.</>}
+            {co.vatPayer && !registry.vatRegCode && (
+              <div style={{ marginTop: 5, fontWeight: 600 }}>
+                ⚠ NDS yoqilgan, lekin reyestrda ro'yxat yo'q — hisob-fakturalarga to'lanmasligi kerak bo'lgan soliq qo'shiladi.
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconMessage size={16} /></span>
