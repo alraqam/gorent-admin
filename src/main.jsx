@@ -5162,9 +5162,20 @@ function BlacklistImport({ onDone }) {
             <span style={{ color: preview.invalid ? 'oklch(0.48 0.14 55)' : 'var(--g-ink-3)' }}>Xato satr: <b>{preview.invalid}</b></span>
             {!!preview.matchedCompanies && <span style={{ color: 'oklch(0.45 0.12 155)' }}>Mavjud ijarachi: <b>{preview.matchedCompanies}</b></span>}
           </div>
+          {/* The raw text matters more than the count: it is the only way to
+              tell a genuinely broken row from one this parser mishandled. */}
           {!!preview.invalidRows?.length && (
             <div style={{ marginTop: 8, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-              {preview.invalidRows.slice(0, 5).map((r) => <div key={r.line}>satr {r.line}: {r.reason}</div>)}
+              {preview.invalidRows.slice(0, 5).map((r) => (
+                <div key={r.line} style={{ marginBottom: 3 }}>
+                  satr {r.line}: {r.reason}
+                  {r.raw && (
+                    <div style={{ fontFamily: 'ui-monospace, monospace', color: 'var(--g-ink-3)', wordBreak: 'break-all' }}>
+                      {r.raw}
+                    </div>
+                  )}
+                </div>
+              ))}
               {preview.invalidRows.length > 5 && <div>…yana {preview.invalidRows.length - 5} ta</div>}
             </div>
           )}
