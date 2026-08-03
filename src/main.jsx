@@ -6596,10 +6596,14 @@ function PlatformTab() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--g-line)' }}>
           <div>
             <FieldLabel>O'lchov birligi</FieldLabel>
-            <input className="adm-input" value={co.packageName}
-              onChange={(e) => setCo((p) => ({ ...p, packageName: e.target.value }))} placeholder="xizmat" />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input className="adm-input" style={{ flex: 1 }} value={co.packageName}
+                onChange={(e) => setCo((p) => ({ ...p, packageName: e.target.value }))} placeholder="xizmat (so'm)" />
+              <input className="adm-input" style={{ width: 110, fontFamily: 'ui-monospace, monospace' }} value={co.packageCode}
+                onChange={(e) => setCo((p) => ({ ...p, packageCode: e.target.value.replace(/\D/g, '') }))} placeholder="1494994" />
+            </div>
             <div style={{ marginTop: 5, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-              Ijara — xizmat, «dona» emas.
+              Nomi va kodi — didox ma'lumotnomasidan, ikkalasi mos bo'lishi kerak (ijara: xizmat (so'm) · 1494994).
             </div>
           </div>
           <div>
