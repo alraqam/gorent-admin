@@ -5006,21 +5006,55 @@ function MoneyStatCard({ icon, label, value, unit = "so'm", color = 'var(--g-ink
 // Tenants we will not rent to again. Entries are never deleted: lifting one
 // keeps the row so the history of who was blocked, why, and who cleared them
 // survives the people involved.
-function BlacklistPanel() {
-  const [rows, setRows] = React.useState(null);
+const BL_PAGE_SIZE = 50;
+
+function BlacklistPanel({ search }) {
+  const [data, setData] = React.useState(null);
+  const [facets, setFacets] = React.useState({ regions: [], districts: [] });
   const [err, setErr] = React.useState(null);
-  const [showLifted, setShowLifted] = React.useState(false);
+  const [f, setF] = React.useState({ status: 'active', origin: 'all', region: '', district: '' });
+  const [page, setPage] = React.useState(1);
   const [lifting, setLifting] = React.useState(null); // entry → lift modal
+  const setFilter = (k, v) => setF((s) => ({ ...s, [k]: v, ...(k === 'region' ? { district: '' } : {}) }));
+
+  // The header search box drives this, debounced: an 8000-row list is queried
+  // in the database, not filtered in the browser.
+  const [q, setQ] = React.useState(search || '');
+  React.useEffect(() => {
+    const t = setTimeout(() => setQ(search || ''), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  // Any change of what is being asked for starts again at page 1, or the
+  // pager can leave you looking at an empty page 40 of a 3-row result.
+  React.useEffect(() => { setPage(1); }, [q, f.status, f.origin, f.region, f.district]);
 
   const load = React.useCallback(async () => {
     setErr(null);
-    try { setRows(await api.get(`/blacklist${showLifted ? '?all=true' : ''}`)); }
+    const p = new URLSearchParams({ page: String(page), pageSize: String(BL_PAGE_SIZE), status: f.status });
+    if (q.trim()) p.set('search', q.trim());
+    if (f.origin !== 'all') p.set('origin', f.origin);
+    if (f.region) p.set('region', f.region);
+    if (f.district) p.set('district', f.district);
+    try { setData(await api.get(`/blacklist?${p.toString()}`)); }
     catch (e) { setErr(e?.message || 'Yuklab bo‘lmadi'); }
-  }, [showLifted]);
+  }, [page, q, f.status, f.origin, f.region, f.district]);
   React.useEffect(() => { load(); }, [load]);
 
+  // Loaded once: the choices come from the whole list, not the current page.
+  const loadFacets = React.useCallback(async () => {
+    try { setFacets(await api.get('/blacklist/facets')); } catch { /* filters just stay empty */ }
+  }, []);
+  React.useEffect(() => { loadFacets(); }, [loadFacets]);
+
+  const reload = React.useCallback(async () => { await load(); await loadFacets(); }, [load, loadFacets]);
+
   if (err) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div></Card>;
-  if (!rows) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div></Card>;
+  if (!data) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div></Card>;
+
+  const rows = data.rows || [];
+  const districts = facets.districts.filter((d) => !f.region || d.region === f.region).map((d) => d.district);
+  const from = data.total ? (data.page - 1) * data.pageSize + 1 : 0;
+  const to = Math.min(data.page * data.pageSize, data.total);
 
   const columns = [
     // An imported subject has no Company behind it — the printed name and tax
@@ -5069,19 +5103,57 @@ function BlacklistPanel() {
 
   return (
     <div>
-      <BlacklistImport onDone={load} />
+      <BlacklistImport onDone={reload} />
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12 }}>
-        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
-          Bu ijarachilarga yangi bandlov yaratib bo‘lmaydi. Qo‘shish uchun «Sobiq ijarachilar» ro‘yxatidan
-          yoki yuqoridagi CSV importdan foydalaning.
-        </div>
-        <label style={{ display: 'flex', gap: 7, alignItems: 'center', cursor: 'pointer', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>
-          <input type="checkbox" checked={showLifted} onChange={(e) => setShowLifted(e.target.checked)} />
-          Bekor qilinganlar ham
-        </label>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 12 }}>
+        Bu ijarachilarga yangi bandlov yaratib bo‘lmaydi. Qo‘shish uchun «Sobiq ijarachilar» ro‘yxatidan
+        yoki yuqoridagi CSV importdan foydalaning. Qidiruv yuqoridagi qidiruv maydoni orqali —
+        nomi, STIR/JSHSHIR, viloyat yoki sabab bo‘yicha.
       </div>
-      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty="Qora ro'yxat bo'sh" />
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+        <select className="adm-select" style={{ width: 'auto' }} value={f.status} onChange={(e) => setFilter('status', e.target.value)}>
+          <option value="active">Amaldagilar</option>
+          <option value="lifted">Bekor qilinganlar</option>
+          <option value="all">Hammasi</option>
+        </select>
+        <select className="adm-select" style={{ width: 'auto' }} value={f.origin} onChange={(e) => setFilter('origin', e.target.value)}>
+          <option value="all">Barcha manbalar</option>
+          <option value="imported">Import qilingan</option>
+          <option value="manual">Qo‘lda qo‘shilgan</option>
+        </select>
+        <select className="adm-select" style={{ width: 'auto' }} value={f.region} onChange={(e) => setFilter('region', e.target.value)}>
+          <option value="">Barcha viloyatlar</option>
+          {facets.regions.map((r) => <option key={r} value={r}>{r}</option>)}
+        </select>
+        {!!districts.length && (
+          <select className="adm-select" style={{ width: 'auto' }} value={f.district} onChange={(e) => setFilter('district', e.target.value)}>
+            <option value="">Barcha tumanlar</option>
+            {districts.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        )}
+        {(q.trim() || f.region || f.district || f.origin !== 'all' || f.status !== 'active') && (
+          <Btn kind="ghost" sm onClick={() => setF({ status: 'active', origin: 'all', region: '', district: '' })}>
+            Filtrlarni tozalash
+          </Btn>
+        )}
+        <div style={{ marginLeft: 'auto', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'nowrap' }}>
+          {data.total ? `${from}–${to} / ${data.total} ta` : '0 ta'}
+        </div>
+      </div>
+
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id}
+        empty={q.trim() || f.region ? 'Hech narsa topilmadi' : "Qora ro'yxat bo'sh"} />
+
+      {data.pages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          <Btn kind="ghost" sm disabled={data.page <= 1} onClick={() => setPage(data.page - 1)}>← Oldingi</Btn>
+          <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+            {data.page} / {data.pages}
+          </span>
+          <Btn kind="ghost" sm disabled={data.page >= data.pages} onClick={() => setPage(data.page + 1)}>Keyingi →</Btn>
+        </div>
+      )}
 
       <GoModal open={!!lifting} onClose={() => setLifting(null)} title="Qora ro'yxatdan chiqarish">
         {lifting && <LiftBlacklistForm entry={lifting} onCancel={() => setLifting(null)} onDone={async () => { setLifting(null); await load(); }} />}
@@ -5533,7 +5605,7 @@ function DebtorsScreen({ search }) {
         </div>
       )}
 
-      {tab === 'blacklist' && isPlatform ? <BlacklistPanel /> :
+      {tab === 'blacklist' && isPlatform ? <BlacklistPanel search={search} /> :
        tab === 'reminders' && isPlatform ? <RemindersPanel /> : (
       <>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
