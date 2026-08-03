@@ -4412,8 +4412,9 @@ function CompanyForm({ company, onClose }) {
     name: company.name, type: company.type || 'business', inn: company.inn || '', pinfl: company.pinfl || '',
     phones: company.phones?.length ? company.phones : [''],
     directorPassport: company.directorPassport || '', guvohnoma: company.guvohnoma || '',
+    address: company.address || '', vatRegCode: company.vatRegCode || '',
     ediExempt: !!company.ediExempt, ediExemptReason: company.ediExemptReason || '',
-  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '', ediExempt: false, ediExemptReason: '' });
+  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '', address: '', vatRegCode: '', ediExempt: false, ediExemptReason: '' });
   const [files, setFiles] = React.useState({ passport: null, guvohnoma: null });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -4438,6 +4439,8 @@ function CompanyForm({ company, onClose }) {
         phones: f.phones.map((p) => p.trim()).filter(Boolean),
         directorPassport: f.directorPassport.trim() || null,
         guvohnoma: f.guvohnoma.trim() || null,
+        address: f.address.trim() || null,
+        vatRegCode: f.vatRegCode.trim() || null,
         ediExempt: f.ediExempt,
         ediExemptReason: f.ediExempt ? (f.ediExemptReason.trim() || null) : null,
       };
@@ -4524,6 +4527,26 @@ function CompanyForm({ company, onClose }) {
                 <input className="adm-input" value={f.inn} onChange={(e) => set('inn', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
               </div>
             )}
+          </div>
+
+          {/* Both print on the ESF as the buyer's details. Without them the
+              «Манзил» and registration-code lines go out blank. */}
+          <div style={{ marginTop: 14 }}>
+            <Label>Yuridik manzil</Label>
+            <input className="adm-input" value={f.address} onChange={(e) => set('address', e.target.value)}
+              placeholder="Toshkent sh., Yunusobod tumani, 5-mavze, 12-uy" />
+            <div style={{ marginTop: 5, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              Hisob-fakturada xaridorning manzili sifatida chiqadi.
+            </div>
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <Label>QQS ro'yxatdan o'tish kodi</Label>
+            <input className="adm-input" value={f.vatRegCode}
+              onChange={(e) => set('vatRegCode', e.target.value.replace(/\D/g, '').slice(0, 20))}
+              placeholder="20208000007510207001" />
+            <div style={{ marginTop: 5, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              Ijarachining kodi (bizniki emas) — QQS to'lovchi bo'lsa.
+            </div>
           </div>
         </Card>
 
@@ -6366,6 +6389,18 @@ function PlatformTab() {
     vatRate: initCo.vatRate ?? 12,
     vatRegCode: initCo.vatRegCode ?? '',
     vatRegStatus: initCo.vatRegStatus ?? 0,
+    // Who the ESF says is selling. Left blank these fall back to the server's
+    // env values — which is how an invoice went out with no seller name at all.
+    name: initCo.name ?? '',
+    address: initCo.address ?? '',
+    account: initCo.account ?? '',
+    mfo: initCo.mfo ?? '',
+    director: initCo.director ?? '',
+    accountant: initCo.accountant ?? '',
+    // Rent is billed as a service, not as a count of pieces.
+    packageCode: initCo.packageCode ?? '',
+    packageName: initCo.packageName ?? 'xizmat',
+    origin: initCo.origin ?? 5,
   });
   const [registry, setRegistry] = React.useState(null); // what didox reports
   React.useEffect(() => {
@@ -6390,7 +6425,12 @@ function PlatformTab() {
   const daysValid = parsedDays.length > 0;
   const save = () => gorentMutate(() => api.put('/settings', {
     platform: s,
-    company: { ...co, vatRate: Number(co.vatRate) || 12, vatRegCode: co.vatPayer ? co.vatRegCode.trim() : '' },
+    company: {
+      ...co,
+      vatRate: Number(co.vatRate) || 12,
+      vatRegCode: co.vatPayer ? co.vatRegCode.trim() : '',
+      origin: Number(co.origin) || 5,
+    },
     notifications: { ...n, paymentReminderDays: daysValid ? [...new Set(parsedDays)].sort((a, b) => a - b) : n.paymentReminderDays },
   }));
   return (
@@ -6436,6 +6476,51 @@ function PlatformTab() {
           <Toggle on={s.maintenance} onClick={() => t('maintenance')} />
         </Row>
       </Card>
+
+      {/* What the ESF prints as the seller, and how a rent line is described.
+          These were server env values only, so a blank COMPANY_NAME sent real
+          invoices out with no seller on them and nobody could fix it here. */}
+      <Card>
+        <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Hisob-fakturada yetkazib beruvchi</div>
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 12px' }}>
+          Hisob-fakturada «Етказиб берувчи» sifatida chiqadi. Bo'sh qoldirilsa, serverdagi qiymat ishlatiladi.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+          {[
+            ['name', 'Kompaniya nomi', 'Alraqam Rent MChJ'],
+            ['address', 'Manzil', 'Toshkent sh., Yashnobod tumani…'],
+            ['account', 'Hisob raqami (X/R)', '20208000607205498001'],
+            ['mfo', 'MFO', '00083'],
+            ['director', 'Rahbar', 'ABDURAHMONOV ABDUFATTOH'],
+            ['accountant', 'Bosh hisobchi', '—'],
+          ].map(([k, label, ph]) => (
+            <div key={k}>
+              <FieldLabel>{label}</FieldLabel>
+              <input className="adm-input" value={co[k]} placeholder={ph}
+                onChange={(e) => setCo((p) => ({ ...p, [k]: e.target.value }))} />
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--g-line)' }}>
+          <div>
+            <FieldLabel>O'lchov birligi</FieldLabel>
+            <input className="adm-input" value={co.packageName}
+              onChange={(e) => setCo((p) => ({ ...p, packageName: e.target.value }))} placeholder="xizmat" />
+            <div style={{ marginTop: 5, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              Ijara — xizmat, «dona» emas.
+            </div>
+          </div>
+          <div>
+            <FieldLabel>Tovarning kelib chiqishi (kod)</FieldLabel>
+            <input className="adm-input" type="number" value={co.origin}
+              onChange={(e) => setCo((p) => ({ ...p, origin: e.target.value }))} />
+            <div style={{ marginTop: 5, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              «Xizmat ko'rsatish» kodi — didox ma'lumotnomasidan.
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card>
         <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Soliq (NDS)</div>
         <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 2px' }}>
