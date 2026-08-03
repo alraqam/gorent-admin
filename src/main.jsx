@@ -4425,6 +4425,32 @@ function CompanyForm({ company, onClose }) {
   const removePhone = (i) => setF((s) => ({ ...s, phones: s.phones.length > 1 ? s.phones.filter((_, idx) => idx !== i) : s.phones }));
 
   const isIndividual = f.type === 'individual';
+
+  // Pull the tenant's details from the tax registry instead of retyping them.
+  // Whatever comes back fills only the EMPTY fields — a lookup must never
+  // overwrite something an operator has already corrected by hand.
+  const [lookupBusy, setLookupBusy] = React.useState(false);
+  const [lookupNote, setLookupNote] = React.useState(null);
+  const taxId = isIndividual ? f.pinfl : f.inn;
+  const canLookup = isIndividual ? /^\d{14}$/.test(f.pinfl) : /^\d{9}$/.test(f.inn);
+  const lookup = async () => {
+    setLookupBusy(true); setLookupNote(null);
+    try {
+      const r = await api.get(`/companies/lookup?taxId=${taxId}`);
+      setF((s) => ({
+        ...s,
+        name: s.name.trim() || r.name || '',
+        address: s.address.trim() || r.address || '',
+        vatRegCode: s.vatRegCode.trim() || r.vatRegCode || '',
+      }));
+      const got = ['name', 'address', 'vatRegCode'].filter((k) => r[k]);
+      setLookupNote(got.length
+        ? `Topildi: ${got.length} ta maydon${r.mode === 'mock' ? ' (mock)' : ''}`
+        : 'Reyestrda maʼlumot topilmadi');
+    } catch (e) { setLookupNote(e?.message || 'Topilmadi'); }
+    setLookupBusy(false);
+  };
+
   const submit = async () => {
     if (!f.name.trim()) { window.alert('Ijarachi nomi talab qilinadi'); return; }
     if (isIndividual ? !/^\d{14}$/.test(f.pinfl) : !/^\d{9}$/.test(f.inn)) {
@@ -4527,6 +4553,15 @@ function CompanyForm({ company, onClose }) {
                 <input className="adm-input" value={f.inn} onChange={(e) => set('inn', e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="123456789" />
               </div>
             )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+            <Btn kind="soft" sm disabled={!canLookup || lookupBusy} onClick={lookup}>
+              {lookupBusy ? 'Qidirilmoqda…' : 'didox dan toʻldirish'}
+            </Btn>
+            <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              {lookupNote || 'Nomi, manzili va QQS kodini soliq reyestridan oladi (boʻsh maydonlarni).'}
+            </span>
           </div>
 
           {/* Both print on the ESF as the buyer's details. Without them the
