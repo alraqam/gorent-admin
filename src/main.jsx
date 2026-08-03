@@ -5981,7 +5981,14 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
   const [renewOpen, setRenewOpen] = React.useState(false);
   const [soliq, setSoliq] = React.useState('');
   const [soliqBusy, setSoliqBusy] = React.useState(false);
-  React.useEffect(() => { setSoliq(c ? (c.soliqRegNumber || '') : ''); setRenewOpen(false); }, [c && c.id]);
+  // didox's own id for this contract, which the ESF carries as ContractId.
+  const [didoxId, setDidoxId] = React.useState('');
+  const [didoxBusy, setDidoxBusy] = React.useState(false);
+  React.useEffect(() => {
+    setSoliq(c ? (c.soliqRegNumber || '') : '');
+    setDidoxId(c ? (c.didoxContractId || '') : '');
+    setRenewOpen(false);
+  }, [c && c.id]);
   if (!c) return <Drawer open={false} onClose={onClose} width={560}><div /></Drawer>;
 
   const bk = c.booking || {};
@@ -6000,6 +6007,12 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
     try { await api.patch(`/contracts/${c.id}`, { soliqRegNumber: soliq.trim() || null }); onChanged(); }
     catch (e) { window.alert(e.message); }
     setSoliqBusy(false);
+  };
+  const saveDidoxId = async () => {
+    setDidoxBusy(true);
+    try { await api.patch(`/contracts/${c.id}`, { didoxContractId: didoxId.trim() || null }); onChanged(); }
+    catch (e) { window.alert(e.message); }
+    setDidoxBusy(false);
   };
   const terminate = async () => {
     const note = window.prompt(`${c.number} shartnomasini bekor qilasizmi? Bandlov ham bekor qilinadi. Izoh (ixtiyoriy):`);
@@ -6083,6 +6096,18 @@ function ContractDetailDrawer({ c, onClose, onChanged }) {
             <span style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)', flexShrink: 0 }}>Soliq ro'yxat raqami</span>
             <input className="adm-input" style={{ flex: 1 }} value={soliq} onChange={(e) => setSoliq(e.target.value)} placeholder="ijara.soliq.uz raqami" />
             <Btn kind="soft" sm onClick={saveSoliq} disabled={soliqBusy || (soliq || '') === (c.soliqRegNumber || '')}>{soliqBusy ? '…' : window.AT.save}</Btn>
+          </div>
+          {/* didox contract id — what the ESF sends as ContractId, linking the
+              invoice to this contract on didox's side. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 0 10px' }}>
+            <span style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)', flexShrink: 0 }}>didox shartnoma ID</span>
+            <input className="adm-input" style={{ flex: 1, fontFamily: 'ui-monospace, monospace' }} value={didoxId}
+              onChange={(e) => setDidoxId(e.target.value)} placeholder="didox.uz hujjat IDsi" />
+            <Btn kind="soft" sm onClick={saveDidoxId} disabled={didoxBusy || (didoxId || '') === (c.didoxContractId || '')}>{didoxBusy ? '…' : window.AT.save}</Btn>
+          </div>
+          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', paddingBottom: 10 }}>
+            Hisob-fakturada <b>ContractId</b> sifatida yuboriladi — didox shartnomani shu ID orqali biriktiradi.
+            didox.uz da shartnoma hujjatini ochib, «Хужжат IDси» dan nusxalang.
           </div>
         </div>
       </div>
