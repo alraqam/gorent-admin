@@ -6463,6 +6463,30 @@ function PlatformTab() {
     origin: initCo.origin ?? 5,
   });
   const [registry, setRegistry] = React.useState(null); // what didox reports
+  // Fill the seller block from our own registry record. Overwrites here, unlike
+  // the tenant form: this is one company's own details, and if the registry
+  // disagrees with what was typed, the registry is what the tax office holds.
+  const [coLookupBusy, setCoLookupBusy] = React.useState(false);
+  const [coLookupNote, setCoLookupNote] = React.useState(null);
+  const fillFromRegistry = async () => {
+    setCoLookupBusy(true); setCoLookupNote(null);
+    try {
+      const r = await api.get('/settings/company-lookup');
+      setCo((p) => ({
+        ...p,
+        name: r.name || p.name,
+        address: r.address || p.address,
+        account: r.account || p.account,
+        mfo: r.mfo || p.mfo,
+        director: r.director || p.director,
+        // The registry is also the authority on whether VAT applies at all.
+        vatPayer: r.vatPayer,
+        vatRegCode: r.vatRegCode || '',
+      }));
+      setCoLookupNote(`${r.name || r.tin} — ${r.vatPayer ? 'QQS to‘lovchi' : 'QQSsiz'}${r.mode === 'mock' ? ' (mock)' : ''}. Saqlashni unutmang.`);
+    } catch (e) { setCoLookupNote(e?.message || 'Topilmadi'); }
+    setCoLookupBusy(false);
+  };
   React.useEffect(() => {
     api.get('/settings/company-tax').then((r) => setRegistry(r.registry)).catch(() => setRegistry(null));
   }, []);
@@ -6544,6 +6568,14 @@ function PlatformTab() {
         <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Hisob-fakturada yetkazib beruvchi</div>
         <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 12px' }}>
           Hisob-fakturada «Етказиб берувчи» sifatida chiqadi. Bo'sh qoldirilsa, serverdagi qiymat ishlatiladi.
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <Btn kind="soft" sm disabled={coLookupBusy} onClick={fillFromRegistry}>
+            {coLookupBusy ? 'Olinmoqda…' : 'didox dan toʻldirish'}
+          </Btn>
+          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            {coLookupNote || 'Nomi, manzili, hisob raqami va rahbarni soliq reyestridan oladi.'}
+          </span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           {[
