@@ -4871,6 +4871,27 @@ function InvoicesScreen({ search }) {
               </tbody>
             </table>
           </div>
+
+          {/* Held back for want of a live contract. An ESF is issued UNDER a
+              contract, so these cannot be billed — and an operator has to see
+              that before the run, not wonder next month why a tenant was
+              missed. */}
+          {!!(preview.blocked || []).length && (
+            <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, background: 'oklch(0.97 0.03 70)', border: '1px solid oklch(0.88 0.07 70)' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `700 13px ${window.GO.font}`, color: 'oklch(0.45 0.13 70)', marginBottom: 6 }}>
+                <IconWarn size={15} /> Shartnomasi yo'q — {preview.blocked.length} ta bandlov hisob-fakturasiz qoladi
+              </div>
+              {preview.blocked.map((b) => (
+                <div key={b.bookingId} style={{ font: `400 12.5px ${window.GO.font}`, color: 'oklch(0.42 0.1 70)', marginTop: 2 }}>
+                  <span style={{ fontFamily: 'ui-monospace, monospace' }}>{b.bookingId}</span>
+                  {' · '}{b.company || b.customer} · {b.building} — <b>{b.reason}</b>
+                </div>
+              ))}
+              <div style={{ marginTop: 7, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+                Shartnoma tuzilgach, «Oylik hisob-fakturalarni yaratish» qayta ishga tushiriladi.
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
