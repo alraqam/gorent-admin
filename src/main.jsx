@@ -2811,6 +2811,26 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
           ))}
         </div>
 
+        {/* What was agreed on this lease, and what is known about the tenant.
+            Both internal; shown here because this drawer is where an operator
+            looks before phoning someone. */}
+        {(b.notes || b.companyRef?.notes) && (
+          <div style={{ border: '1px solid var(--g-line)', borderRadius: 13, padding: 16, marginBottom: 20, background: 'var(--g-surface-2, oklch(0.98 0.004 250))' }}>
+            {b.notes && (
+              <div style={{ marginBottom: b.companyRef?.notes ? 12 : 0 }}>
+                <div style={{ font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 4 }}>BANDLOV IZOHI</div>
+                <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{b.notes}</div>
+              </div>
+            )}
+            {b.companyRef?.notes && (
+              <div>
+                <div style={{ font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 4 }}>IJARACHI HAQIDA</div>
+                <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{b.companyRef.notes}</div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Money breakdown */}
         <div style={{ border: '1px solid var(--g-line)', borderRadius: 13, padding: 16, marginBottom: 20 }}>
           {[['Bandlov summasi', window.fmtSom(b.total) + " so'm"], ['Platforma komissiyasi (12%)', '− ' + window.fmtSom(fee) + " so'm"]].map(([k, v]) => (
@@ -2938,7 +2958,7 @@ function BookingForm({ booking, onClose, onSave }) {
   const isEdit = !!booking;
   const [f, setF] = React.useState(() => {
     if (!booking) return {
-      unitId: ((window.UNITS || [])[0] || {}).id || '', customer: '', phone: '', companyId: '',
+      unitId: ((window.UNITS || [])[0] || {}).id || '', customer: '', phone: '', companyId: '', notes: '',
       qty: 1, months: 1, price: '', date: '', startTime: '09:00', endTime: '10:00', endDate: '',
       // Additional rented units for a monthly bundle (office + desks + address).
       // Each is { unitId, qty, start, end, price }; all must be monthly units in
@@ -2957,7 +2977,7 @@ function BookingForm({ booking, onClose, onSave }) {
     const ymdLocal = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
     const base = {
       unitId: booking.unitId, customer: booking.customer, phone: booking.phone || '',
-      companyId: booking.companyId || '', qty: booking.qty || 1, months: booking.months || 1,
+      companyId: booking.companyId || '', notes: booking.notes || '', qty: booking.qty || 1, months: booking.months || 1,
       // Prefill the negotiated rate so an edit preserves it (monthly only; the
       // hourly/daily rate isn't stored per-unit, so it falls back to catalog).
       price: primary?.monthlyPrice ?? '',
@@ -3176,6 +3196,7 @@ function BookingForm({ booking, onClose, onSave }) {
         payload = {
           items, customer: f.customer.trim(), phone: f.phone.trim(),
           companyId: f.companyId, start: mStart.toISOString(), end: mEndExcl.toISOString(),
+          notes: f.notes.trim() || null,
           ...(blConfirmed ? { overrideBlacklist: true } : {}),
         };
       } else {
@@ -3185,6 +3206,7 @@ function BookingForm({ booking, onClose, onSave }) {
           start: startDt.toISOString(), end: endDt.toISOString(), qty: effectiveQty,
           ...(f.companyId ? { companyId: f.companyId } : {}),
           ...(pr != null ? { price: pr } : {}),
+          notes: f.notes.trim() || null,
           ...(blConfirmed ? { overrideBlacklist: true } : {}),
         };
       }
@@ -3249,6 +3271,16 @@ function BookingForm({ booking, onClose, onSave }) {
                   Oylik ijara uchun kompaniya tanlash majburiy (hisob-faktura shu nomga chiqadi).
                 </div>
               )}
+            </div>
+
+            {/* This lease specifically — what was agreed for it, as distinct
+                from what is known about the tenant. Internal, like the
+                tenant's own notes. */}
+            <div style={{ marginTop: 14 }}>
+              <Label>Ichki izoh (shu bandlov uchun)</Label>
+              <textarea className="adm-input" rows={2} style={{ resize: 'vertical', lineHeight: 1.45 }}
+                value={f.notes} onChange={(e) => set('notes', e.target.value)}
+                placeholder="Kelishuv shartlari, alohida talablar…" />
             </div>
 
             {/* Blacklist hit. A host sees why and stops here; a platform
