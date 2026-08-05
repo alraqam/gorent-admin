@@ -4393,6 +4393,16 @@ function CompaniesScreen({ search }) {
     { key: 'phones', label: 'Telefon', render: (c) => <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{(c.phones || []).join(', ') || '—'}</span> },
     { key: 'passport', label: 'Direktor pasporti', render: (c) => <CompanyDocCell has={!!c.directorPassportFile} num={c.directorPassport} /> },
     { key: 'guvohnoma', label: 'Guvohnoma', render: (c) => <CompanyDocCell has={!!c.guvohnomaFile} num={c.guvohnoma} /> },
+    // A note nobody can see is a note nobody reads: flagged in the row, with
+    // the text on hover, so it does not sit hidden behind an edit click.
+    { key: 'notes', label: 'Izoh', render: (c) => (
+      c.notes
+        ? <span title={c.notes} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: 220, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+            <span style={{ color: 'var(--g-ink-4)', display: 'flex', flexShrink: 0 }}><IconDoc size={13} /></span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.notes}</span>
+          </span>
+        : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
+    ) },
     { key: 'actions', label: '', align: 'right', render: (c) => <Btn kind="ghost" sm onClick={() => setEditing(c)}><IconEdit size={14} /> Tahrirlash</Btn> },
   ];
 
@@ -4412,9 +4422,9 @@ function CompanyForm({ company, onClose }) {
     name: company.name, type: company.type || 'business', inn: company.inn || '', pinfl: company.pinfl || '',
     phones: company.phones?.length ? company.phones : [''],
     directorPassport: company.directorPassport || '', guvohnoma: company.guvohnoma || '',
-    address: company.address || '', vatRegCode: company.vatRegCode || '',
+    address: company.address || '', vatRegCode: company.vatRegCode || '', notes: company.notes || '',
     ediExempt: !!company.ediExempt, ediExemptReason: company.ediExemptReason || '',
-  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '', address: '', vatRegCode: '', ediExempt: false, ediExemptReason: '' });
+  } : { name: '', type: 'business', inn: '', pinfl: '', phones: [''], directorPassport: '', guvohnoma: '', address: '', vatRegCode: '', notes: '', ediExempt: false, ediExemptReason: '' });
   const [files, setFiles] = React.useState({ passport: null, guvohnoma: null });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -4467,6 +4477,7 @@ function CompanyForm({ company, onClose }) {
         guvohnoma: f.guvohnoma.trim() || null,
         address: f.address.trim() || null,
         vatRegCode: f.vatRegCode.trim() || null,
+        notes: f.notes.trim() || null,
         ediExempt: f.ediExempt,
         ediExemptReason: f.ediExempt ? (f.ediExemptReason.trim() || null) : null,
       };
@@ -4574,6 +4585,17 @@ function CompanyForm({ company, onClose }) {
               Hisob-fakturada xaridorning manzili sifatida chiqadi.
             </div>
           </div>
+          {/* Internal only — never reaches an ESF, a contract, or the tenant. */}
+          <div style={{ marginTop: 14 }}>
+            <Label>Ichki izohlar</Label>
+            <textarea className="adm-input" rows={3} style={{ resize: 'vertical', lineHeight: 1.45 }}
+              value={f.notes} onChange={(e) => set('notes', e.target.value)}
+              placeholder="Kim bilan gaplashildi, nima kelishildi, nimaga e'tibor berish kerak…" />
+            <div style={{ marginTop: 5, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              Faqat ichki foydalanish uchun — hisob-fakturada ham, shartnomada ham chiqmaydi.
+            </div>
+          </div>
+
           <div style={{ marginTop: 14 }}>
             <Label>QQS ro'yxatdan o'tish kodi</Label>
             <input className="adm-input" value={f.vatRegCode}
