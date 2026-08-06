@@ -5636,6 +5636,55 @@ function MiniStat({ label, value, unit, tone }) {
   );
 }
 
+// Why a live lease is not being invoiced. The API names the reason; this is
+// the operator-facing wording for it.
+const BLOCK_REASONS = {
+  no_contract: 'Shartnoma tuzilmagan',
+  contract_terminated: 'Shartnoma bekor qilingan',
+  contract_expired: 'Shartnoma muddati tugagan',
+  no_company: 'Kompaniya biriktirilmagan',
+};
+
+// Money the system knows about but has never demanded.
+//
+// Debt is invoice-backed, so a lease nothing can invoice reports NO debt at
+// all — a tenant with no contract reads exactly like a tenant who has paid.
+// Same for a month whose generation failed. Neither belongs in `Jami qarz`
+// (nobody can be chased for a document that was never issued), but neither can
+// be left to sit silently either, which is what was happening.
+function BillingGaps({ blocked, failed }) {
+  if (!blocked.length && !failed) return null;
+  return (
+    <div style={{
+      border: '1px solid oklch(0.85 0.09 75)', background: 'oklch(0.97 0.03 85)',
+      borderRadius: 12, padding: '12px 14px', marginBottom: 16,
+    }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `600 13px ${window.GO.font}`, color: 'oklch(0.42 0.11 65)' }}>
+        <IconWarn size={16} />
+        Hisob-faktura chiqarilmagan — bu summalar qarz sifatida ko'rinmaydi
+      </div>
+      {failed > 0 && (
+        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8 }}>
+          Oy yakuni xatolik bilan tugagan: <b>{window.fmtSom(failed)} so'm</b> —
+          Hisob-fakturalar bo'limida «Qayta urinish».
+        </div>
+      )}
+      {blocked.map((r) => (
+        <div key={r.bookingId} style={{
+          display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline',
+          font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 6,
+        }}>
+          <span>
+            <b>{r.company?.name || r.customer}</b> · {r.building} · {r.unit}
+            <span style={{ color: 'oklch(0.5 0.16 25)', fontWeight: 600 }}> — {BLOCK_REASONS[r.billingBlocked] || r.billingBlocked}</span>
+          </span>
+          <span style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{window.fmtSom(r.uninvoiced)} so'm</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 };
@@ -5753,10 +5802,15 @@ function DebtorsScreen({ search }) {
         <MoneyStatCard icon={<IconWallet size={17} />} label="Oldindan to'lovlar" value={window.fmtCompactSom(totals.prepaid)} color="oklch(0.5 0.13 155)" />
       </div>
 
-      {former && (
+      {former ? (
         <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', margin: '-4px 0 14px' }}>
           Ijara muddati tugagan yoki bekor qilingan, lekin qarzi qolgan ijarachilar — yuridik ish yuritish uchun.
         </div>
+      ) : (
+        // Only on the current tab: these are live leases that need an operator
+        // to draw up a contract or re-run the month end. A former tenant's
+        // unbilled months are a backfill job, not a daily prompt.
+        <BillingGaps blocked={data.blocked || []} failed={totals.billingFailed || 0} />
       )}
 
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId}
