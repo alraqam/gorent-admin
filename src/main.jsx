@@ -5645,13 +5645,14 @@ const BLOCK_REASONS = {
   no_company: 'Kompaniya biriktirilmagan',
 };
 
-// Money the system knows about but has never demanded.
+// Debt that has no fiscal document behind it.
 //
-// Debt is invoice-backed, so a lease nothing can invoice reports NO debt at
-// all — a tenant with no contract reads exactly like a tenant who has paid.
-// Same for a month whose generation failed. Neither belongs in `Jami qarz`
-// (nobody can be chased for a document that was never issued), but neither can
-// be left to sit silently either, which is what was happening.
+// A closed period owes its rent whether or not anyone billed it, so this money
+// IS counted in Jami qarz — the tenant genuinely owes it. What is missing is
+// the ESF: a lease with no contract can't be invoiced at all, and a failed
+// month-end run left its own gap. Both are an operator's job to close (draw up
+// the contract, re-run the month, then backfill), and neither shows up
+// anywhere else on the screen.
 function BillingGaps({ blocked, failed }) {
   if (!blocked.length && !failed) return null;
   return (
@@ -5661,7 +5662,7 @@ function BillingGaps({ blocked, failed }) {
     }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `600 13px ${window.GO.font}`, color: 'oklch(0.42 0.11 65)' }}>
         <IconWarn size={16} />
-        Hisob-faktura chiqarilmagan — bu summalar qarz sifatida ko'rinmaydi
+        Qarzga kiritilgan, lekin hisob-faktura rasmiylashtirilmagan
       </div>
       {failed > 0 && (
         <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 8 }}>
@@ -5678,7 +5679,7 @@ function BillingGaps({ blocked, failed }) {
             <b>{r.company?.name || r.customer}</b> · {r.building} · {r.unit}
             <span style={{ color: 'oklch(0.5 0.16 25)', fontWeight: 600 }}> — {BLOCK_REASONS[r.billingBlocked] || r.billingBlocked}</span>
           </span>
-          <span style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{window.fmtSom(r.uninvoiced)} so'm</span>
+          <span style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{window.fmtSom(r.unbilled)} so'm</span>
         </div>
       ))}
     </div>
