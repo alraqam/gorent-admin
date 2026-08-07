@@ -5686,11 +5686,590 @@ function BillingGaps({ blocked, failed }) {
   );
 }
 
+// ═══ QARZDORLIK: the collection record ══════════════════════
+//
+// What was said about a debt and what happens next. A note and a diary entry
+// are one object here, exactly as they are in the API: a note with a follow-up
+// date is a log line AND a calendar item.
+
+const NOTE_KINDS = {
+  note:    { label: 'Izoh', hue: 250 },
+  call:    { label: "Qo'ng'iroq", hue: 250 },
+  visit:   { label: 'Uchrashuv', hue: 200 },
+  letter:  { label: 'Xat / da\'vo', hue: 200 },
+  promise: { label: "To'lov va'dasi", hue: 55 },
+  legal:   { label: 'Yuridik', hue: 25 },
+};
+
+// A promise is resolved from payments, never from what someone ticked.
+const PROMISE_META = {
+  pending: { label: "kutilmoqda", hue: 250 },
+  kept:    { label: "bajarildi", hue: 155 },
+  partial: { label: "qisman to'landi", hue: 55 },
+  broken:  { label: "buzildi", hue: 25 },
+};
+
+const EVENT_META = {
+  followup:        { label: 'Ish rejasi', hue: 250 },
+  promise:         { label: "To'lov va'dasi", hue: 55 },
+  contract_expiry: { label: 'Shartnoma tugaydi', hue: 300 },
+  lease_end:       { label: 'Ijara tugaydi', hue: 200 },
+  invoice_run:     { label: 'Oy yakuni — ESF', hue: 155 },
+};
+
+const toneOf = (hue) => ({
+  color: `oklch(0.44 0.15 ${hue})`,
+  background: `color-mix(in oklch, oklch(0.6 0.16 ${hue}) 14%, transparent)`,
+});
+
+function Chip({ hue, children, style }) {
+  return (
+    <span style={{
+      display: 'inline-block', padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap',
+      font: `700 11px ${window.GO.font}`, ...toneOf(hue), ...style,
+    }}>{children}</span>
+  );
+}
+
+// Midnight today, as the yyyy-mm-dd string DateField speaks.
+function isoToday(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// ─── Add a note ─────────────────────────────────────────────
+// One form for both halves: what happened, and what happens next. The
+// follow-up date and the promise are optional, so the common case (log a call)
+// stays two fields.
+function DebtNoteForm({ bookingId, onDone, onCancel }) {
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
+  const [f, setF] = React.useState({
+    kind: 'call', body: '', dueAt: '', promisedAmount: '', promisedDate: '', pinned: false, internal: false,
+  });
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+
+  // Half a promise can never be resolved kept-or-broken, so the API rejects it
+  // — say so here rather than letting the round trip fail.
+  const halfPromise = (!!f.promisedAmount) !== (!!f.promisedDate);
+  const canSubmit = f.body.trim().length >= 2 && !halfPromise;
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setErr(null); setBusy(true);
+    try {
+      await api.post('/debt-notes', {
+        bookingId,
+        kind: f.kind,
+        body: f.body.trim(),
+        ...(f.dueAt ? { dueAt: new Date(`${f.dueAt}T00:00:00Z`).toISOString() } : {}),
+        ...(f.promisedAmount ? { promisedAmount: Number(f.promisedAmount) } : {}),
+        ...(f.promisedDate ? { promisedDate: new Date(`${f.promisedDate}T00:00:00Z`).toISOString() } : {}),
+        ...(f.pinned ? { pinned: true } : {}),
+        ...(f.internal && isPlatform ? { internal: true } : {}),
+      });
+      onDone();
+    } catch (e) {
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: 12, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)', marginBottom: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, marginBottom: 10 }}>
+        <div>
+          <Label>Turi</Label>
+          <select className="adm-select" style={{ width: '100%' }} value={f.kind} onChange={(e) => set('kind', e.target.value)}>
+            {Object.entries(NOTE_KINDS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <Label>Nima bo'ldi</Label>
+          <textarea className="adm-input" rows={2} value={f.body} onChange={(e) => set('body', e.target.value)}
+            placeholder="Direktor bilan gaplashildi, oylik hisob-kitobni kutmoqda"
+            style={{ width: '100%', resize: 'vertical', font: `400 13px ${window.GO.font}` }} />
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div>
+          <Label>Keyingi ish sanasi</Label>
+          <DateField value={f.dueAt} onChange={(v) => set('dueAt', v)} />
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            {[{ d: 1, l: 'Ertaga' }, { d: 3, l: '3 kun' }, { d: 7, l: 'Bir hafta' }].map((o) => (
+              <button key={o.d} type="button" onClick={() => set('dueAt', isoToday(o.d))} style={{
+                border: '1px solid var(--g-line)', background: 'var(--g-card)', borderRadius: 8, cursor: 'pointer',
+                padding: '3px 8px', font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)',
+              }}>{o.l}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <Label>Va'da qilingan summa</Label>
+          <input className="adm-input" inputMode="numeric" value={f.promisedAmount}
+            onChange={(e) => set('promisedAmount', e.target.value.replace(/\D/g, ''))}
+            placeholder="5000000" style={{ width: '100%' }} />
+        </div>
+        <div>
+          <Label>Va'da sanasi</Label>
+          <DateField value={f.promisedDate} onChange={(v) => set('promisedDate', v)} />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        <label style={{ display: 'flex', gap: 7, alignItems: 'center', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={f.pinned} onChange={(e) => set('pinned', e.target.checked)} />
+          Qatorda doim ko'rsatilsin
+        </label>
+        {isPlatform && (
+          <label title="Mezbon bu izohni ko'rmaydi" style={{ display: 'flex', gap: 7, alignItems: 'center', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={f.internal} onChange={(e) => set('internal', e.target.checked)} />
+            Faqat platforma uchun
+          </label>
+        )}
+      </div>
+
+      {halfPromise && (
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 8 }}>
+          Va'da uchun summa ham, sana ham kerak — aks holda bajarildimi yo'qmi aniqlab bo'lmaydi.
+        </div>
+      )}
+      {err && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 8 }}>{err}</div>}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <Btn kind="quiet" sm onClick={onCancel}>Bekor qilish</Btn>
+        <Btn kind="primary" sm onClick={submit} disabled={!canSubmit || busy}>{busy ? 'Saqlanmoqda…' : 'Saqlash'}</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─── One note in the timeline ───────────────────────────────
+function DebtNoteItem({ n, onChanged }) {
+  const kind = NOTE_KINDS[n.kind] || NOTE_KINDS.note;
+  const promise = n.promise && n.promise.state !== 'none' ? n.promise : null;
+  const pm = promise ? (PROMISE_META[promise.state] || PROMISE_META.pending) : null;
+
+  const toggleDone = async () => {
+    try { await api.post(`/debt-notes/${n.id}/done`, { done: !n.doneAt }); onChanged(); }
+    catch (e) { window.alert(e.message); }
+  };
+  const togglePin = async () => {
+    try { await api.post(`/debt-notes/${n.id}/pin`, { pinned: !n.pinned }); onChanged(); }
+    catch (e) { window.alert(e.message); }
+  };
+  // Soft delete: the row survives, stamped with who and why, because these
+  // notes are the evidence behind a claim.
+  const remove = async () => {
+    const reason = window.prompt("Nima uchun o'chirilmoqda?");
+    if (!reason || reason.trim().length < 2) return;
+    try { await api.del(`/debt-notes/${n.id}`, { reason: reason.trim() }); onChanged(); }
+    catch (e) { window.alert(e.message); }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 11, padding: '11px 0', borderBottom: '1px solid var(--g-line)' }}>
+      <span style={{ marginTop: 6, width: 7, height: 7, borderRadius: 999, flexShrink: 0, background: `oklch(0.6 0.16 ${kind.hue})` }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+          <Chip hue={kind.hue}>{kind.label}</Chip>
+          {n.pinned && <Chip hue={30}>MUHIM</Chip>}
+          {n.internal && <Chip hue={300}>ICHKI</Chip>}
+          {promise && (
+            <Chip hue={pm.hue}>
+              {window.fmtSom(n.promisedAmount)} · {fmtDate(n.promisedDate)} — {pm.label}
+              {promise.state === 'partial' ? ` (${window.fmtSom(promise.paid)})` : ''}
+            </Chip>
+          )}
+        </div>
+        <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'pre-wrap' }}>{n.body}</div>
+        {n.place && <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{n.place}</div>}
+
+        {n.dueAt && (
+          <label style={{
+            display: 'inline-flex', gap: 7, alignItems: 'center', marginTop: 7, cursor: 'pointer',
+            font: `500 12px ${window.GO.font}`,
+            color: n.doneAt ? 'var(--g-ink-4)' : n.overdueFollowUp ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-2)',
+          }}>
+            <input type="checkbox" checked={!!n.doneAt} onChange={toggleDone} />
+            <span style={{ textDecoration: n.doneAt ? 'line-through' : 'none' }}>
+              Keyingi ish: {fmtDate(n.dueAt)}{n.overdueFollowUp && !n.doneAt ? ' — muddati o\'tgan' : ''}
+            </span>
+          </label>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 5 }}>
+          <span>{fmtDate(n.createdAt)} · {n.authorEmail || '—'}</span>
+          <button onClick={togglePin} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--g-ink-4)', font: 'inherit', padding: 0 }}>
+            {n.pinned ? 'Yechish' : 'Muhim'}
+          </button>
+          <button onClick={remove} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--g-ink-4)', font: 'inherit', padding: 0 }}>
+            O'chirish
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Timeline for one lease (or the whole tenant) ───────────
+// Tenant scope is how a renewal keeps its history: a renewed lease is a new
+// booking but the same Company.
+function DebtNotesPanel({ bookingId, companyId, onChanged }) {
+  const [notes, setNotes] = React.useState(null);
+  const [scope, setScope] = React.useState('booking');
+  const [adding, setAdding] = React.useState(false);
+
+  const load = React.useCallback(() => {
+    setNotes(null);
+    api.get(`/debt-notes?booking=${encodeURIComponent(bookingId)}&scope=${scope}`)
+      .then(setNotes).catch(() => setNotes([]));
+  }, [bookingId, scope]);
+  React.useEffect(() => { load(); }, [load]);
+
+  // A note can change a row's warning state, so the debtors table is refreshed
+  // alongside the timeline.
+  const changed = () => { load(); if (onChanged) onChanged(); };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+          Izohlar va ish rejasi{notes ? ` · ${notes.length}` : ''}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {companyId && (
+            <Segmented
+              value={scope}
+              onChange={setScope}
+              options={[{ value: 'booking', label: 'Shu ijara' }, { value: 'tenant', label: 'Ijarachi bo\'yicha' }]}
+            />
+          )}
+          {!adding && <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Izoh qo'shish</Btn>}
+        </div>
+      </div>
+
+      {adding && (
+        <DebtNoteForm
+          bookingId={bookingId}
+          onCancel={() => setAdding(false)}
+          onDone={() => { setAdding(false); changed(); }}
+        />
+      )}
+
+      {notes === null
+        ? <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>
+        : notes.length === 0
+          ? <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              Hali izoh yo'q. Qo'ng'iroq, va'da yoki kelishuvni shu yerga yozing — keyin kim nima deganini eslab qolish shart bo'lmaydi.
+            </div>
+          : <div>{notes.map((n) => <DebtNoteItem key={n.id} n={n} onChanged={changed} />)}</div>}
+    </div>
+  );
+}
+
+// ─── Debtor row → drawer ────────────────────────────────────
+function DebtDetailDrawer({ row, onClose, onPay }) {
+  const open = !!row;
+  return (
+    <Drawer open={open} onClose={onClose} width={620}>
+      {row && (
+        <>
+          <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--g-line)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ font: `700 16px ${window.GO.font}`, color: 'var(--g-ink)' }}>{row.customer}</div>
+              <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>
+                {row.company?.name ? `${row.company.name} · ` : ''}{row.building} · {row.unit} ·{' '}
+                <span style={{ fontFamily: 'ui-monospace, monospace' }}>{row.bookingId}</span>
+              </div>
+            </div>
+            <IconBtn title="Yopish" onClick={onClose}><IconClose size={16} /></IconBtn>
+          </div>
+
+          <div className="adm-scroll" style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
+            <Card pad={16} style={{ marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                <MiniStat label="Qarz" value={window.fmtCompactSom(Math.max(0, row.outstanding))} tone={row.outstanding > 0 ? 'bad' : undefined} />
+                <MiniStat label="To'langan" value={window.fmtCompactSom(row.paid)} />
+                <MiniStat label="Kechikish" value={String(row.daysOverdue || 0)} unit="kun" tone={row.daysOverdue > 0 ? 'bad' : undefined} />
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Btn kind="primary" sm onClick={() => onPay(row)}><IconPlus size={14} /> To'lov kiritish</Btn>
+                <a href={`tel:+${row.phone}`} style={{ textDecoration: 'none' }}>
+                  <Btn kind="ghost" sm><IconPhone size={14} /> +{row.phone}</Btn>
+                </a>
+                <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+                  {fmtDate(row.start)} – {fmtDate(row.end)}
+                </span>
+              </div>
+            </Card>
+
+            <Card pad={16}>
+              <DebtNotesPanel
+                bookingId={row.bookingId}
+                companyId={row.company?.id || null}
+                onChanged={() => { if (window.__gorentRefresh) window.__gorentRefresh(); }}
+              />
+            </Card>
+          </div>
+        </>
+      )}
+    </Drawer>
+  );
+}
+
+// ─── "Bugungi ishlar" ───────────────────────────────────────
+// The strip an operator actually works from. A month grid answers "what is
+// coming"; this answers "who do I call now", which is the question they open
+// the screen with.
+function WorklistStrip({ onOpen, version }) {
+  const [data, setData] = React.useState(null);
+  const load = React.useCallback(() => {
+    api.get('/debt-notes/worklist').then(setData).catch(() => setData({ items: [], count: 0, overdue: 0 }));
+  }, []);
+  React.useEffect(() => { load(); }, [load, version]);
+
+  const done = async (id) => {
+    try { await api.post(`/debt-notes/${id}/done`, { done: true }); load(); }
+    catch (e) { window.alert(e.message); }
+  };
+
+  if (!data || !data.count) return null;
+  return (
+    <div style={{
+      border: '1px solid oklch(0.86 0.06 250)', background: 'oklch(0.98 0.015 250)',
+      borderRadius: 12, padding: '12px 14px', marginBottom: 16,
+    }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `600 13px ${window.GO.font}`, color: 'oklch(0.4 0.1 260)' }}>
+        <IconClock size={16} />
+        Bugungi ishlar · {data.count} ta
+        {data.overdue > 0 && <span style={{ color: 'oklch(0.5 0.16 25)' }}>({data.overdue} tasi kechikkan)</span>}
+      </div>
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {data.items.slice(0, 8).map((i) => (
+          <div key={i.id} style={{ display: 'flex', gap: 10, alignItems: 'baseline', justifyContent: 'space-between', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+            <span style={{ minWidth: 0 }}>
+              <b style={{ color: i.overdue ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)' }}>{fmtDate(i.dueAt)}</b>
+              {' — '}
+              <button onClick={() => onOpen(i.bookingId)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit', color: 'var(--g-brand-ink)', textDecoration: 'underline' }}>
+                {i.company || i.customer}
+              </button>
+              {' · '}{i.body}
+            </span>
+            <Btn kind="quiet" sm onClick={() => done(i.id)} style={{ flexShrink: 0 }}><IconCheck2 size={13} /> Bajarildi</Btn>
+          </div>
+        ))}
+        {data.count > 8 && (
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            va yana {data.count - 8} ta — Kalendar bo'limida.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Kalendar ───────────────────────────────────────────────
+// Every dated thing that bears on collecting money, in one grid. Derived
+// server-side from notes, leases, contracts and the month-end run — nothing
+// here is a separate calendar the operator has to maintain.
+function DebtCalendarPanel({ onOpen }) {
+  const [month, setMonth] = React.useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [picked, setPicked] = React.useState(null); // yyyy-mm-dd
+
+  const first = new Date(Date.UTC(month.y, month.m, 1));
+  const last = new Date(Date.UTC(month.y, month.m + 1, 0));
+  const key = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+
+  React.useEffect(() => {
+    setData(null); setErr(null); setPicked(null);
+    api.get(`/debt-notes/calendar?from=${key(first)}&to=${key(last)}`)
+      .then(setData).catch((e) => setErr(e?.message || 'Yuklab bo‘lmadi'));
+  }, [month.y, month.m]);
+
+  const byDay = React.useMemo(() => {
+    const map = {};
+    for (const e of (data?.events || [])) {
+      const k = key(new Date(e.date));
+      (map[k] = map[k] || []).push(e);
+    }
+    return map;
+  }, [data]);
+
+  // Monday-first, like every Uzbek calendar.
+  const lead = (first.getUTCDay() + 6) % 7;
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= last.getUTCDate(); d++) cells.push(new Date(Date.UTC(month.y, month.m, d)));
+
+  const todayKey = key(new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
+  const shift = (n) => setMonth((s) => {
+    const d = new Date(Date.UTC(s.y, s.m + n, 1));
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() };
+  });
+  const MONTH_NAMES = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IconBtn title="Oldingi oy" onClick={() => shift(-1)}><IconChevL size={16} /></IconBtn>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', minWidth: 150, textAlign: 'center' }}>
+              {MONTH_NAMES[month.m]} {month.y}
+            </div>
+            <IconBtn title="Keyingi oy" onClick={() => shift(1)}><IconChevR size={16} /></IconBtn>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {Object.entries(EVENT_META).map(([k, v]) => (
+              <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: `oklch(0.6 0.16 ${v.hue})` }} />
+                {v.label}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {err && <div style={{ font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+          {['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'].map((d) => (
+            <div key={d} style={{ font: `600 11px ${window.GO.font}`, color: 'var(--g-ink-4)', textTransform: 'uppercase', letterSpacing: '0.04em', padding: '2px 4px' }}>{d}</div>
+          ))}
+          {cells.map((d, i) => {
+            if (!d) return <div key={`e${i}`} />;
+            const k = key(d);
+            const events = byDay[k] || [];
+            const isToday = k === todayKey;
+            const on = picked === k;
+            return (
+              <button key={k} onClick={() => setPicked(on ? null : k)} style={{
+                textAlign: 'left', minHeight: 78, padding: 6, cursor: 'pointer',
+                borderRadius: 10, background: on ? 'var(--g-bg-2)' : 'var(--g-card)',
+                border: `1px solid ${isToday ? 'var(--g-brand)' : 'var(--g-line)'}`,
+              }}>
+                <div style={{ font: `${isToday ? 700 : 500} 12px ${window.GO.font}`, color: isToday ? 'var(--g-brand-ink)' : 'var(--g-ink-3)', marginBottom: 3 }}>
+                  {d.getUTCDate()}
+                </div>
+                {events.slice(0, 3).map((e, j) => {
+                  const meta = EVENT_META[e.type] || EVENT_META.followup;
+                  return (
+                    <div key={j} title={`${meta.label}${e.customer ? ` · ${e.customer}` : ''}`} style={{
+                      display: 'flex', gap: 4, alignItems: 'center', marginTop: 2,
+                      font: `500 10.5px ${window.GO.font}`,
+                      color: e.overdue ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-2)',
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      <span style={{ width: 6, height: 6, borderRadius: 999, flexShrink: 0, background: `oklch(0.6 0.16 ${meta.hue})` }} />
+                      {e.type === 'invoice_run' ? 'Oy yakuni' : (e.company || e.customer || meta.label)}
+                    </div>
+                  );
+                })}
+                {events.length > 3 && (
+                  <div style={{ font: `500 10.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>+{events.length - 3}</div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      <Card>
+        <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>
+          {picked ? `${fmtDate(picked)} — kunlik reja` : 'Oylik ro\'yxat'}
+        </div>
+        <DebtEventList
+          events={(picked ? (byDay[picked] || []) : (data?.events || []))}
+          onOpen={onOpen}
+          loading={!data && !err}
+        />
+      </Card>
+    </div>
+  );
+}
+
+function DebtEventList({ events, onOpen, loading }) {
+  if (loading) return <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>;
+  if (!events.length) return <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Bu davrda hech narsa yo'q.</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {events.map((e, i) => {
+        const meta = EVENT_META[e.type] || EVENT_META.followup;
+        return (
+          <div key={i} style={{ display: 'flex', gap: 11, padding: '9px 0', borderBottom: i < events.length - 1 ? '1px solid var(--g-line)' : 0, alignItems: 'baseline' }}>
+            <span style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)', width: 78, flexShrink: 0 }}>{fmtDate(e.date)}</span>
+            <Chip hue={meta.hue} style={{ flexShrink: 0 }}>{meta.label}</Chip>
+            <div style={{ minWidth: 0, flex: 1, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+              {e.type === 'invoice_run'
+                ? <>{e.period} davri uchun hisob-fakturalar shu kuni yaratiladi — shu kundan qarz hisoblanadi.</>
+                : <>
+                    {e.bookingId
+                      ? <button onClick={() => onOpen(e.bookingId)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: `600 12.5px ${window.GO.font}`, color: 'var(--g-brand-ink)' }}>
+                          {e.company || e.customer}
+                        </button>
+                      : <b>{e.company || e.customer}</b>}
+                    <span style={{ color: 'var(--g-ink-4)' }}> · {e.place}</span>
+                    {e.body && <div style={{ marginTop: 2 }}>{e.body}</div>}
+                    {e.amount != null && (
+                      <div style={{ marginTop: 2, color: e.overdue ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-3)', fontWeight: 600 }}>
+                        {window.fmtSom(e.amount)} so'm{e.state ? ` — ${(PROMISE_META[e.state] || {}).label || e.state}` : ''}
+                      </div>
+                    )}
+                    {e.type === 'followup' && e.done && <span style={{ color: 'oklch(0.45 0.13 155)', fontWeight: 600 }}> · bajarildi</span>}
+                  </>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// The note column's cell: the last thing said, plus whatever is outstanding
+// about this tenant that the money columns cannot show.
+function NotesCell({ n }) {
+  if (!n) return <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>—</span>;
+  return (
+    <div style={{ minWidth: 0, maxWidth: 260 }}>
+      {n.pinned && (
+        <div style={{ font: `600 11.5px ${window.GO.font}`, color: 'oklch(0.45 0.14 30)', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          📌 {n.pinned}
+        </div>
+      )}
+      {n.lastNote && (
+        <div title={n.lastNote.body} style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {n.lastNote.body}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 3 }}>
+        {n.lastNote && (
+          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            {fmtDate(n.lastNote.createdAt)} · {n.noteCount} ta
+          </span>
+        )}
+        {n.followUp && <Chip hue={n.followUp.overdue ? 25 : 250}>{n.followUp.overdue ? 'Kechikkan ish' : 'Reja'} {fmtDate(n.followUp.dueAt)}</Chip>}
+        {n.promise && <Chip hue={(PROMISE_META[n.promise.state] || {}).hue ?? 250}>Va'da {(PROMISE_META[n.promise.state] || {}).label}</Chip>}
+        {n.brokenPromises > 1 && <Chip hue={25}>{n.brokenPromises} ta buzilgan va'da</Chip>}
+      </div>
+    </div>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 };
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
   const [blacklisting, setBlacklisting] = React.useState(null); // former debtor → blacklist modal
+  const [detail, setDetail] = React.useState(null); // debtor row → collection drawer
+  // Bumped whenever a note changes, so the worklist strip reloads without
+  // waiting for a full bootstrap.
+  const [noteVersion, setNoteVersion] = React.useState(0);
   // Two separate collection problems, never mixed: tenants still in the space
   // (chase with a reminder) and tenants who left owing money (a legal matter).
   const [tab, setTab] = React.useState('current');
@@ -5704,6 +6283,28 @@ function DebtorsScreen({ search }) {
     rows = rows.filter((r) => `${r.customer} ${r.company?.name || ''} ${r.building} ${r.unit}`.toLowerCase().includes(q));
   }
   const groupTotals = (former ? totals.former : totals.current) || { outstanding: 0, count: 0, maxDaysOverdue: 0 };
+
+  // Open the collection drawer from anywhere that knows only a booking id —
+  // the calendar and the worklist both point at leases that may not be on the
+  // debtors list at all (a lease ending, a follow-up on someone who has since
+  // paid). Those still have a history worth reading, so a minimal row is built
+  // from the bookings dataset rather than making the link dead.
+  const openBooking = (bookingId) => {
+    const row = (data.rows || []).find((r) => r.bookingId === bookingId);
+    if (row) { setDetail(row); return; }
+    const b = (window.BOOKINGS || []).find((x) => x.id === bookingId);
+    if (!b) return;
+    setDetail({
+      bookingId: b.id,
+      customer: b.customer,
+      phone: b.phone,
+      company: b.companyRef ? { id: b.companyRef.id, name: b.companyRef.name } : null,
+      building: b.unit?.offering?.building?.name || '—',
+      unit: b.unit?.name || '—',
+      start: b.start, end: b.end,
+      outstanding: 0, paid: 0, daysOverdue: 0,
+    });
+  };
 
   const columns = [
     { key: 'cust', label: 'Mijoz', render: (r) => (
@@ -5756,6 +6357,8 @@ function DebtorsScreen({ search }) {
     { key: 'outstanding', label: 'Qoldiq', align: 'right', render: (r) => r.outstanding > 0
       ? <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', whiteSpace: 'nowrap' }}>{window.fmtSom(r.outstanding)} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm</span></div>
       : <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)', whiteSpace: 'nowrap' }}>{window.fmtSom(Math.abs(r.outstanding))} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm oldindan</span></div> },
+    // What the money columns cannot say: what was agreed, and what is next.
+    { key: 'notes', label: 'Izoh', render: (r) => <NotesCell n={r.notes} /> },
     { key: 'act', label: '', align: 'right', render: (r) => (
       <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
         {/* Blocking a tenant is a platform decision, and only makes sense for
@@ -5775,6 +6378,9 @@ function DebtorsScreen({ search }) {
           {[
             { id: 'current', label: `Joriy ijarachilar${totals.current?.count ? ` · ${totals.current.count}` : ''}` },
             { id: 'former', label: `Sobiq ijarachilar${totals.former?.count ? ` · ${totals.former.count}` : ''}` },
+            // Host-visible too: the calendar is their own leases and their own
+            // follow-ups, scoped server-side.
+            { id: 'calendar', label: 'Kalendar' },
             ...(isPlatform ? [{ id: 'reminders', label: 'Eslatmalar' }, { id: 'blacklist', label: "Qora ro'yxat" }] : []),
           ].map((t) => {
             const on = tab === t.id;
@@ -5789,8 +6395,11 @@ function DebtorsScreen({ search }) {
       )}
 
       {tab === 'blacklist' && isPlatform ? <BlacklistPanel search={search} /> :
-       tab === 'reminders' && isPlatform ? <RemindersPanel /> : (
+       tab === 'reminders' && isPlatform ? <RemindersPanel /> :
+       tab === 'calendar' ? <DebtCalendarPanel onOpen={openBooking} /> : (
       <>
+      <WorklistStrip onOpen={openBooking} version={noteVersion} />
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
         <MoneyStatCard icon={<IconWarn size={17} />} label={former ? 'Undirilmagan qarz' : 'Jami qarz'} value={window.fmtCompactSom(groupTotals.outstanding)} color="oklch(0.5 0.16 25)" />
         <MoneyStatCard icon={<IconUsers size={17} />} label="Qarzdorlar soni" value={String(groupTotals.count)} unit="ta" />
@@ -5814,10 +6423,16 @@ function DebtorsScreen({ search }) {
         <BillingGaps blocked={data.blocked || []} failed={totals.billingFailed || 0} />
       )}
 
-      <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId}
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} onRow={setDetail}
         empty={former ? "Sobiq ijarachilarda qarz yo'q 🎉" : "Qarzdorlik yo'q 🎉"} />
       </>
       )}
+
+      <DebtDetailDrawer
+        row={detail}
+        onClose={() => { setDetail(null); setNoteVersion((v) => v + 1); }}
+        onPay={(r) => setPaying(r)}
+      />
 
       <GoModal open={!!blacklisting} onClose={() => setBlacklisting(null)} title="Qora ro'yxatga qo'shish">
         {blacklisting && (
@@ -6051,6 +6666,12 @@ function BookingMoneySections({ b }) {
           )}
         </div>
       )}
+
+      {/* The same collection record the Qarzdorlik drawer shows — one panel in
+          both places, so the two can never tell different stories. */}
+      <div style={{ marginTop: 4 }}>
+        <DebtNotesPanel bookingId={b.id} companyId={b.companyRef?.id || null} onChanged={refreshAll} />
+      </div>
     </>
   );
 }
@@ -6517,6 +7138,7 @@ function PayoutStatementsPanel({ role }) {
 
 Object.assign(window, {
   GoModal, PaymentForm, ChargeForm, BookingMoneySections, DebtorsScreen,
+  DebtNotesPanel, DebtNoteForm, DebtDetailDrawer, DebtCalendarPanel, WorklistStrip,
   ContractsScreen, ContractDetailDrawer, ContractRenewModal,
   PayoutStatementsPanel, StatementDetailDrawer,
 });

@@ -63,7 +63,9 @@ const get = (path) => request(path);
 const post = (path, body) => request(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
 const put = (path, body) => request(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined });
 const patch = (path, body) => request(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined });
-const del = (path) => request(path, { method: 'DELETE' });
+// A body on DELETE is unusual but the collection notes need one: removing a
+// note records WHY, and the reason has nowhere else to travel.
+const del = (path, body) => request(path, { method: 'DELETE', body: body ? JSON.stringify(body) : undefined });
 
 // Multipart upload — must NOT set Content-Type (the browser adds the boundary).
 async function upload(path, file, fieldName = 'file') {
