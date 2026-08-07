@@ -6261,6 +6261,29 @@ function NotesCell({ n }) {
   );
 }
 
+// Download the whole receivables book as CSV — both groups, every column the
+// screen shows plus the ones it cannot fit: tax id, blacklist status, and the
+// collection record.
+function ExportDebtorsBtn() {
+  const [busy, setBusy] = React.useState(false);
+  const go = async () => {
+    setBusy(true);
+    try {
+      await api.downloadFile('/debtors/export', 'qarzdorlar.csv');
+    } catch (e) {
+      window.alert(e && e.message ? e.message : 'Yuklab bo‘lmadi');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Btn kind="ghost" sm onClick={go} disabled={busy}
+      title="Barcha qarzdorlar (joriy + sobiq) — Excel uchun CSV">
+      <IconDownload size={14} /> {busy ? 'Tayyorlanmoqda…' : 'CSV yuklab olish'}
+    </Btn>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 };
@@ -6374,7 +6397,8 @@ function DebtorsScreen({ search }) {
   return (
     <div>
       {(
-        <div style={{ display: 'flex', gap: 4, marginBottom: 18, borderBottom: '1px solid var(--g-line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, borderBottom: '1px solid var(--g-line)' }}>
+          <div style={{ display: 'flex', gap: 4 }}>
           {[
             { id: 'current', label: `Joriy ijarachilar${totals.current?.count ? ` · ${totals.current.count}` : ''}` },
             { id: 'former', label: `Sobiq ijarachilar${totals.former?.count ? ` · ${totals.former.count}` : ''}` },
@@ -6391,6 +6415,11 @@ function DebtorsScreen({ search }) {
               }}>{t.label}</button>
             );
           })}
+          </div>
+          {/* Deliberately not tied to the active tab or the search box: the
+              file is the whole book, with a Guruh column telling joriy and
+              sobiq apart. */}
+          {(tab === 'current' || tab === 'former') && <ExportDebtorsBtn />}
         </div>
       )}
 

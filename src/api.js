@@ -96,6 +96,36 @@ async function fileBlobUrl(path) {
   return URL.createObjectURL(await res.blob());
 }
 
+// Save an auth-gated endpoint straight to the user's downloads. An <a href>
+// can't carry the bearer token, so fetch it, hand the blob to a synthetic
+// link, and let the server's Content-Disposition name it (falling back to
+// `filename` when the header isn't readable).
+async function downloadFile(path, filename) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(BASE + path, { headers });
+  if (!res.ok) {
+    let msg = res.statusText || 'Yuklab bo‘lmadi';
+    try {
+      const d = JSON.parse(await res.text());
+      if (d && d.message) msg = Array.isArray(d.message) ? d.message.join(', ') : d.message;
+    } catch { /* not JSON — keep the status text */ }
+    throw new ApiError(msg, res.status);
+  }
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = /filename="?([^"]+)"?/.exec(cd);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (m && m[1]) || filename || 'export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking immediately can cancel the download in Safari; a tick is enough.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function login(email, password) {
   const res = await post('/auth/login', { email, password });
   setToken(res.accessToken);
@@ -179,7 +209,7 @@ async function bootstrap() {
 export const api = {
   BASE,
   getToken, setToken, clearToken, currentUser, isAuthed,
-  get, post, put, patch, del, upload, fileBlobUrl,
+  get, post, put, patch, del, upload, fileBlobUrl, downloadFile,
   login, logout, bootstrap,
   ApiError,
 };
