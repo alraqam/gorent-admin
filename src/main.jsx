@@ -2904,6 +2904,10 @@ function monthlyTerm(start, end, monthlyPrice, qty = 1) {
     const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
     const to = monthEnd <= end ? monthEnd : new Date(end);
     const days = daysBetween(cursor, to);
+    // Sub-day residue is not an instalment — see the same guard in the API's
+    // term.ts. Without it a UTC-midnight end on a machine east of UTC showed
+    // an "Oxirgi oy (to'liq emas) · 0/31 kun · 0 so'm" row.
+    if (days <= 0) break;
     const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
     // A whole month runs 1st-to-1st and is charged the flat rate, so February
     // does not come out cheaper than March.
@@ -2931,6 +2935,23 @@ function monthlyTerm(start, end, monthlyPrice, qty = 1) {
     tail: last.partial && last !== first ? last : null,
   };
 }
+// The end date for a term of N whole months, as the yyyy-mm-dd string the form
+// holds. Mirrors termEndFromMonths in the API's src/common/term.ts: a lease
+// starting mid-month opens with a pro-rata stub, and the N months run AFTER it.
+//
+// The API works in EXCLUSIVE end boundaries; this field holds the last day of
+// occupancy (monthlyEndExclusive adds the day back on submit), so the boundary
+// is stepped back one day before being written here.
+function endDateForMonths(startIso, months) {
+  if (!startIso) return '';
+  const [y, mo, day] = startIso.split('-').map(Number);
+  const start = new Date(y, mo - 1, day);
+  const firstFull = day === 1 ? start : new Date(y, mo, 1);
+  const boundary = addMonthsClamped(firstFull, months);
+  const lastDay = new Date(boundary.getFullYear(), boundary.getMonth(), boundary.getDate() - 1);
+  return `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+}
+
 function termLabelUz(months, tailDays) {
   const parts = [];
   if (months > 0) parts.push(`${months} oy`);
@@ -3355,6 +3376,21 @@ function BookingForm({ booking, onClose, onSave }) {
                     <div>
                       <Label>Tugash sanasi</Label>
                       <DateField min={f.date || undefined} value={f.endDate} onChange={(v) => set('endDate', v)} />
+                      {/* "12 oy" means twelve WHOLE months of rent — the part
+                          month a mid-month start opens with is extra, not one
+                          of the twelve. Mirrors termEndFromMonths on the API;
+                          working the date out by hand is how a lease ends up a
+                          stub short and the tenant sits in credit. */}
+                      {f.date && (
+                        <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                          {[3, 6, 12].map((m) => (
+                            <button key={m} type="button" onClick={() => set('endDate', endDateForMonths(f.date, m))} style={{
+                              border: '1px solid var(--g-line)', background: 'var(--g-card)', borderRadius: 8, cursor: 'pointer',
+                              padding: '3px 9px', font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-3)',
+                            }}>{m} oy</button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     {showQty && (
                       <div>
