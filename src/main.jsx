@@ -5316,7 +5316,11 @@ function BlacklistPanel({ search }) {
       )}
 
       <GoModal open={!!lifting} onClose={() => setLifting(null)} title="Qora ro'yxatdan chiqarish">
-        {lifting && <LiftBlacklistForm entry={lifting} onCancel={() => setLifting(null)} onDone={async () => { setLifting(null); await load(); }} />}
+        {/* Refresh the debtor rows too, not just this panel: they carry the
+            blacklist flag, so without it a lifted tenant keeps reading as
+            blocked over on the Sobiq tab. */}
+        {lifting && <LiftBlacklistForm entry={lifting} onCancel={() => setLifting(null)}
+          onDone={async () => { setLifting(null); await load(); if (window.__gorentRefresh) await window.__gorentRefresh(); }} />}
       </GoModal>
     </div>
   );
@@ -6410,11 +6414,22 @@ function DebtorsScreen({ search }) {
     // What the money columns cannot say: what was agreed, and what is next.
     { key: 'notes', label: 'Izoh', render: (r) => <NotesCell n={r.notes} /> },
     { key: 'act', label: '', align: 'right', render: (r) => (
-      <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-        {/* Blocking a tenant is a platform decision, and only makes sense for
-            someone who has already left owing money. */}
-        {former && isPlatform && r.outstanding > 0 && (
-          <Btn kind="ghost" sm onClick={() => setBlacklisting(r)}>Qora ro'yxatga</Btn>
+      <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+        {/* Already blocked — say so instead of offering to do it again. The
+            entry may have been made against their INN or their phone rather
+            than this company, or imported from the tax authority's list, so
+            the row states which identity matched. */}
+        {r.blacklist?.blocked ? (
+          <Chip hue={25} style={{ padding: '4px 10px' }}
+            title={[r.blacklist.reason, r.blacklist.matchedBy && `moslik: ${r.blacklist.matchedBy}`].filter(Boolean).join(' · ')}>
+            QORA RO'YXATDA
+          </Chip>
+        ) : (
+          /* Blocking a tenant is a platform decision, and only makes sense for
+             someone who has already left owing money. */
+          former && isPlatform && r.outstanding > 0 && (
+            <Btn kind="ghost" sm onClick={() => setBlacklisting(r)}>Qora ro'yxatga</Btn>
+          )
         )}
         <Btn kind="primary" sm onClick={() => setPaying(r)}><IconPlus size={14} /> To'lov kiritish</Btn>
       </div>
@@ -6495,7 +6510,14 @@ function DebtorsScreen({ search }) {
           <BlacklistForm
             row={blacklisting}
             onCancel={() => setBlacklisting(null)}
-            onDone={() => { setBlacklisting(null); setTab('blacklist'); }}
+            // Refresh before switching tabs: the debtor rows carry the
+            // blacklist flag, and without this the row they just blocked still
+            // offers the button when they navigate back to it.
+            onDone={async () => {
+              setBlacklisting(null);
+              if (window.__gorentRefresh) await window.__gorentRefresh();
+              setTab('blacklist');
+            }}
           />
         )}
       </GoModal>
