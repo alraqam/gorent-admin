@@ -2875,8 +2875,12 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
 }
 
 // Monthly lease term, mirrored from the API's src/common/term.ts so the form
-// previews exactly what the backend will bill. A term may end mid-month; the
-// final month is charged pro-rata by days.
+// previews exactly what the backend will bill — if these two drift, the price
+// quoted to the tenant is not the price on their invoice.
+//
+// Rent is billed BY CALENDAR MONTH: moving in on the 7th costs 7th-to-month-end
+// at a daily rate, then whole months, then a pro-rata tail on the way out. So a
+// term can have a part month at BOTH ends.
 function addMonthsClamped(d, months) {
   const r = new Date(d);
   const day = r.getDate();
@@ -2893,25 +2897,39 @@ function daysBetween(a, b) {
 function monthlyTerm(start, end, monthlyPrice, qty = 1) {
   if (!start || !end || !(end > start)) return null;
   const monthly = monthlyPrice * qty;
+
+  const instalments = [];
   let cursor = new Date(start);
+  while (cursor < end) {
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    const to = monthEnd <= end ? monthEnd : new Date(end);
+    const days = daysBetween(cursor, to);
+    const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+    // A whole month runs 1st-to-1st and is charged the flat rate, so February
+    // does not come out cheaper than March.
+    const whole = cursor.getDate() === 1 && +to === +monthEnd;
+    instalments.push({
+      days, daysInMonth, partial: !whole,
+      amount: whole ? monthly : Math.round((monthly * days) / daysInMonth),
+    });
+    cursor = monthEnd;
+  }
+  const total = instalments.reduce((s, i) => s + i.amount, 0);
+
+  // Term LENGTH is still measured by anniversary — "12 oy" is what the parties
+  // agreed, however the billing is sliced.
   let months = 0;
-  let total = 0;
-  for (;;) {
-    const next = addMonthsClamped(start, months + 1);
-    if (next > end) break;
-    total += monthly;
-    cursor = next;
-    months++;
-  }
-  const tailDays = daysBetween(cursor, end);
-  let tail = null;
-  if (tailDays > 0) {
-    const daysInMonth = daysBetween(cursor, addMonthsClamped(cursor, 1));
-    const amount = Math.round((monthly * tailDays) / daysInMonth);
-    tail = { days: tailDays, daysInMonth, amount };
-    total += amount;
-  }
-  return { months, tailDays, tail, total };
+  while (addMonthsClamped(start, months + 1) <= end) months++;
+  const tailDays = daysBetween(addMonthsClamped(start, months), end);
+
+  const first = instalments[0];
+  const last = instalments[instalments.length - 1];
+  return {
+    months, tailDays, total,
+    head: first.partial ? first : null,
+    // A single part-month term is a head, not also a tail.
+    tail: last.partial && last !== first ? last : null,
+  };
 }
 function termLabelUz(months, tailDays) {
   const parts = [];
@@ -3352,6 +3370,15 @@ function BookingForm({ booking, onClose, onSave }) {
                       <div style={{ display: 'flex', justifyContent: 'space-between', font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
                         <span>Muddat</span><span>{termLabelUz(term.months, term.tailDays)}</span>
                       </div>
+                      {/* A mid-month start is billed by the day, so the first
+                          month is shown as its own line — this is the number
+                          the tenant asks about. */}
+                      {term.head && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+                          <span>Birinchi oy (to'liq emas)</span>
+                          <span>{term.head.days}/{term.head.daysInMonth} kun · {window.fmtSom(term.head.amount)} so'm</span>
+                        </div>
+                      )}
                       {term.tail && (
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
                           <span>Oxirgi oy (to'liq emas)</span>
