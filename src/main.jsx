@@ -6352,8 +6352,8 @@ function ExportDebtorsBtn() {
 }
 
 function DebtorsScreen({ search }) {
-  const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 }, rows: [] };
-  const totals = data.totals || { outstanding: 0, prepaid: 0, uninvoiced: 0, debtorCount: 0 };
+  const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, unbilled: 0, debtorCount: 0 }, rows: [] };
+  const totals = data.totals || { outstanding: 0, prepaid: 0, unbilled: 0, debtorCount: 0 };
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
   const [blacklisting, setBlacklisting] = React.useState(null); // former debtor → blacklist modal
   const [detail, setDetail] = React.useState(null); // debtor row → collection drawer
@@ -6424,23 +6424,17 @@ function DebtorsScreen({ search }) {
           </div>
         : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
     ) }] : []),
-    // "Kutilgan" is what has been INVOICED. Rent that has accrued but has not
-    // been billed yet hangs underneath it, so it is visible without being
-    // counted as debt the tenant has been asked to pay.
-    { key: 'expected', label: 'Hisob-faktura qilingan', align: 'right', render: (r) => (
+    // What the lease says they owe by today — its own total, spread over its
+    // own term. Underneath: how much of that no ESF covers, which is a
+    // document problem rather than a debt one.
+    { key: 'expected', label: 'Hisoblangan', align: 'right', render: (r) => (
       <div style={{ whiteSpace: 'nowrap' }}>
         <MoneyCell n={r.expected} />
-        {/* An EDI-exempt tenant is billed on paper, so their figure is the
-            accrued rent — say so, or the column header lies about it. */}
-        {r.company?.ediExempt
-          ? <div title="Ijarachi ESF dan chiqarilgan — hisob-faktura o'rniga hisoblangan ijara" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
-              hisoblangan (ESF yo'q)
-            </div>
-          : r.uninvoiced > 0 && (
-            <div title="Hisoblangan, lekin hali hisob-faktura qilinmagan" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
-              +{window.fmtSom(r.uninvoiced)} hisoblanmoqda
-            </div>
-          )}
+        {r.unbilled > 0 && (
+          <div title="Shu summaning hisob-fakturasi yo'q" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+            {window.fmtSom(r.unbilled)} ESF yo'q
+          </div>
+        )}
       </div>
     ) },
     { key: 'paid', label: "To'langan", align: 'right', render: (r) => <MoneyCell n={r.paid} /> },
@@ -6514,8 +6508,9 @@ function DebtorsScreen({ search }) {
           // For a former tenant the age of the debt is what matters (limitation
           // periods, escalation), not rent that has yet to be billed.
           ? <MoneyStatCard icon={<IconClock size={17} />} label="Eng eski qarz" value={String(groupTotals.maxDaysOverdue || 0)} unit="kun" />
-          /* Accrued but not yet billed — becomes debt at the month-end run. */
-          : <MoneyStatCard icon={<IconDoc size={17} />} label="Hisob-faktura kutilmoqda" value={window.fmtCompactSom(totals.uninvoiced || 0)} />}
+          /* Owed money with no ESF behind it. Not "coming" — it is already in
+             the debt above; this says the tax document for it is missing. */
+          : <MoneyStatCard icon={<IconDoc size={17} />} label="ESF yo'q" value={window.fmtCompactSom(totals.unbilled || 0)} />}
         <MoneyStatCard icon={<IconWallet size={17} />} label="Oldindan to'lovlar" value={window.fmtCompactSom(totals.prepaid)} color="oklch(0.5 0.13 155)" />
       </div>
 
