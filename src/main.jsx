@@ -2743,6 +2743,9 @@ function StatusChips({ dict, value, setValue, counts }) {
 
 // ═══ BOOKINGS ═══════════════════════════════════════════════
 function BookingDetailDrawer({ b, onClose, onEdit }) {
+  // Declared before the empty-drawer early return: hooks cannot be conditional,
+  // and this component renders with no booking whenever the drawer is closed.
+  const [endingEarly, setEndingEarly] = React.useState(false);
   if (!b) return <Drawer open={false} onClose={onClose} width={520}><div /></Drawer>;
   const unit = b.unit || {};
   const offering = unit.offering || {};
@@ -2868,9 +2871,110 @@ function BookingDetailDrawer({ b, onClose, onEdit }) {
       <div style={{ display: 'flex', gap: 10, padding: '16px 22px', borderTop: '1px solid var(--g-line)', background: 'var(--g-card)', flexShrink: 0 }}>
         {b.status === 'pending'
           ? <><Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/bookings/${b.id}/approve`)); onClose(); }}><IconCheck2 size={16} /> {window.AT.approve}</Btn><Btn kind="danger" style={{ flex: 1, justifyContent: 'center' }} onClick={async () => { await gorentMutate(() => api.post(`/bookings/${b.id}/reject`)); onClose(); }}><IconX2 size={16} /> {window.AT.reject}</Btn></>
-          : <><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }}><IconDownload size={16} /> Chek</Btn><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => onEdit && onEdit(b)}><IconEdit size={16} /> {window.AT.edit}</Btn>{['active','confirmed'].includes(b.status) && <Btn kind="danger" style={{ justifyContent: 'center' }} onClick={async () => { if (window.confirm(`${b.id} bandlovni bekor qilasizmi?`)) { await gorentMutate(() => api.post(`/bookings/${b.id}/cancel`)); onClose(); } }}><IconX2 size={16} /></Btn>}</>}
+          : <><Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }} onClick={() => onEdit && onEdit(b)}><IconEdit size={16} /> {window.AT.edit}</Btn>{period === 'month' && ['active','confirmed'].includes(b.status) && <Btn kind="ghost" style={{ flex: 1, justifyContent: 'center' }} title="Ijarachi muddatdan oldin ketmoqda — shu kungacha hisoblanadi" onClick={() => setEndingEarly(true)}><IconClock size={16} /> Erta tugatish</Btn>}{['active','confirmed'].includes(b.status) && <Btn kind="danger" style={{ justifyContent: 'center' }} title="Bandlovni bekor qilish" onClick={async () => { if (window.confirm(`${b.id} bandlovni bekor qilasizmi?`)) { await gorentMutate(() => api.post(`/bookings/${b.id}/cancel`)); onClose(); } }}><IconX2 size={16} /></Btn>}</>}
       </div>
+      {endingEarly && <EndEarlyModal booking={b} onClose={() => setEndingEarly(false)} onDone={onClose} />}
     </Drawer>
+  );
+}
+
+// Ending a lease early: the tenant is leaving on a date the operator names.
+//
+// Distinct from "Bekor qilish", which voids the lease. This shortens the term,
+// so the days they actually had are still billed — the final month pro-rata —
+// and everything after it stops: no more rent, no more ESF, and the unit is
+// free for the next tenant from that date.
+//
+// The picked date is the LAST DAY of the lease, matching BookingForm, so the
+// exclusive boundary sent to the server is the day after.
+function EndEarlyModal({ booking: b, onClose, onDone }) {
+  const [date, setDate] = React.useState('');
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const ymd = (d) => {
+    const x = new Date(d);
+    return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-${String(x.getUTCDate()).padStart(2, '0')}`;
+  };
+  const startDt = new Date(b.start);
+  const endExcl = date ? monthlyEndExclusive(date) : null;
+  // Same per-line arithmetic the server runs, so the figure shown here is the
+  // figure that lands on the lease.
+  const items = (b.items?.length ? b.items : [{ qty: b.qty, monthlyPrice: b.monthlyPrice, start: b.start, end: b.end }]);
+  const newTotal = endExcl && endExcl > startDt
+    ? items.reduce((sum, it) => {
+        const s = new Date(it.start);
+        if (s >= endExcl) return sum; // line never starts
+        const e = new Date(it.end) > endExcl ? endExcl : new Date(it.end);
+        const t = monthlyTerm(s, e, it.monthlyPrice || 0, it.qty || 1);
+        return sum + (t ? t.total : 0);
+      }, 0)
+    : null;
+  const valid = !!endExcl && endExcl > startDt && endExcl < new Date(b.end);
+
+  const submit = async () => {
+    if (!valid) return;
+    setErr(null); setBusy(true);
+    try {
+      // Called directly rather than through gorentMutate: that helper reports
+      // the outcome as a boolean and alerts on failure, and this needs both the
+      // response body and its errors shown in the form.
+      const res = await api.post(`/bookings/${b.id}/end-early`, { endsAt: endExcl.toISOString() });
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      // Fiscal documents for months the lease no longer reaches. Not a debt,
+      // but somebody has to deal with them at the tax office.
+      const stale = res?.staleInvoices || [];
+      if (stale.length) {
+        window.alert(`Diqqat: ${stale.map((i) => i.period).join(', ')} davrlari uchun ESF mavjud — ijara endi bu oylarni qamramaydi.`);
+      }
+      onDone && onDone();
+      onClose();
+    } catch (e) {
+      setErr(e?.message || "Tugatib bo'lmadi");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <GoModal open onClose={onClose} title="Muddatidan oldin tugatish" width={440}>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 14, lineHeight: 1.5 }}>
+        Ijarachi ketadigan oxirgi kunni kiriting. Shu kungacha ijara hisoblanadi (oxirgi oy kunlar bo'yicha),
+        keyin hisob-faktura ham to'xtaydi va birlik bo'shaydi.
+      </div>
+      <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Oxirgi kun</div>
+      <DateField value={date} onChange={setDate} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 14, padding: '11px 13px',
+        background: 'var(--g-bg-2)', borderRadius: 11, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+        <span>Hozirgi muddat</span>
+        <span style={{ color: 'var(--g-ink-2)', fontWeight: 500 }}>{fmtDate(b.start)} – {fmtDate(b.end)}</span>
+      </div>
+      {newTotal != null && valid && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 8, padding: '11px 13px',
+          background: 'var(--g-bg-2)', borderRadius: 11, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+          <span>Yangi summa</span>
+          <span style={{ color: 'var(--g-ink)', fontWeight: 700 }}>
+            {window.fmtSom(newTotal)} so'm
+            <span style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginLeft: 6 }}>
+              ({window.fmtSom(newTotal - b.total)} so'm)
+            </span>
+          </span>
+        </div>
+      )}
+      {date && !valid && (
+        <div style={{ marginTop: 10, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+          Sana ijara muddati ichida bo'lishi kerak ({fmtDate(b.start)} – {fmtDate(b.end)}).
+        </div>
+      )}
+      {err && <div style={{ marginTop: 10, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+        <Btn kind="quiet" style={{ flex: 1, justifyContent: 'center' }} onClick={onClose}>Bekor qilish</Btn>
+        <Btn kind="primary" style={{ flex: 1, justifyContent: 'center' }} disabled={!valid || busy} onClick={submit}>
+          {busy ? 'Tugatilmoqda…' : 'Tugatish'}
+        </Btn>
+      </div>
+      <div style={{ marginTop: 10, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+        Bekor qilish emas: ijarachi turgan kunlar hisobda qoladi. {ymd(b.start)} dan keyingi istalgan kun.
+      </div>
+    </GoModal>
   );
 }
 
