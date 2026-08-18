@@ -7856,7 +7856,10 @@ function TeamTab() {
   const blank = { name: '', email: '', password: '', role: 'platform', org: 'Gorent' };
   const [f, setF] = React.useState(blank);
   const me = api.currentUser();
-  const roleHue = (r) => (r === 'platform' ? 155 : 268);
+  const roleHue = (r) => (r === 'platform' ? 155 : r === 'agent' ? 38 : 268);
+  // Which broker's mandates are open. A broker with none reaches nothing, so
+  // the row says so rather than looking like an ordinary account.
+  const [mandating, setMandating] = React.useState(null);
 
   const load = React.useCallback(() => {
     api.get('/users').then(setUsers).catch((e) => setErr(e.message));
@@ -7897,6 +7900,7 @@ function TeamTab() {
           <select className="adm-select" style={{ width: '100%' }} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
             <option value="platform">Platforma admini</option>
             <option value="host">Mezbon</option>
+            <option value="agent">Vakil (broker)</option>
           </select>
           {err && <div style={{ gridColumn: '1 / -1', font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
           <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -7920,14 +7924,153 @@ function TeamTab() {
             <select className="adm-select" value={u.role} onChange={(e) => setRole(u, e.target.value)} style={{ padding: '6px 26px 6px 10px' }}>
               <option value="platform">Platforma</option>
               <option value="host">Mezbon</option>
+              <option value="agent">Vakil</option>
             </select>
+            {u.role === 'agent' && (
+              <Btn kind="ghost" sm onClick={() => setMandating(u)} title="Bu vakil qaysi mulkdorlar nomidan ish yuritadi">
+                <IconUsers size={14} /> Vakolatlar
+              </Btn>
+            )}
             {isMe
               ? <span style={{ width: 32, display: 'inline-block' }} />
               : <IconBtn title="O'chirish" onClick={() => del(u)} style={{ color: 'oklch(0.55 0.16 25)' }}><IconTrash size={16} /></IconBtn>}
           </div>
         );
       })}
+      {mandating && <MandatesModal agent={mandating} onClose={() => { setMandating(null); load(); }} />}
     </Card>
+  );
+}
+
+// ── Broker mandates ─────────────────────────────────────────────
+// An outside broker reaches nothing on its own: what they can see and do comes
+// entirely from the mandates listed here. Granting is the whole access-control
+// story for the role, so the screen states it plainly rather than hiding it
+// behind a permissions matrix elsewhere.
+const CAPABILITY_LABELS = {
+  listings: "E'lonlar — binolar, takliflar, birliklar",
+  bookings: 'Ijara — bandlov ochish, tahrirlash, tugatish',
+  collect: "Undirish — to'lov, qo'shimcha to'lov, izohlar",
+  documents: 'Hujjatlar — shartnoma va ESF',
+};
+// What a broker gets unless the owner says otherwise. `documents` is absent on
+// purpose: an ESF is filed in the OWNER's name and a contract binds them.
+const DEFAULT_CAPS = ['listings', 'bookings', 'collect'];
+
+function MandatesModal({ agent, onClose }) {
+  const [rows, setRows] = React.useState(null);
+  const [hosts, setHosts] = React.useState([]);
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [f, setF] = React.useState({ hostId: '', capabilities: DEFAULT_CAPS, commissionPct: '' });
+
+  const load = React.useCallback(() => {
+    api.get('/agents')
+      .then((all) => setRows((all.find((a) => a.id === agent.id) || {}).mandates || []))
+      .catch((e) => setErr(e.message));
+  }, [agent.id]);
+  React.useEffect(() => { load(); api.get('/hosts').then(setHosts).catch(() => {}); }, [load]);
+
+  const toggle = (cap) => setF((s) => ({
+    ...s,
+    capabilities: s.capabilities.includes(cap)
+      ? s.capabilities.filter((c) => c !== cap)
+      : [...s.capabilities, cap],
+  }));
+
+  const grant = async () => {
+    if (!f.hostId) return;
+    setBusy(true); setErr(null);
+    try {
+      await api.post(`/agents/${agent.id}/mandates`, {
+        hostId: f.hostId,
+        capabilities: f.capabilities,
+        ...(f.commissionPct === '' ? {} : { commissionPct: Number(f.commissionPct) }),
+      });
+      setF({ hostId: '', capabilities: DEFAULT_CAPS, commissionPct: '' });
+      load();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const revoke = async (m) => {
+    // The reason is what gets asked for afterwards, so it is required rather
+    // than a confirm dialog.
+    const reason = window.prompt(`"${m.host?.name}" bo'yicha vakolat nima uchun bekor qilinmoqda?`);
+    if (!reason) return;
+    try { await api.post(`/agents/mandates/${m.id}/revoke`, { reason }); load(); }
+    catch (e) { window.alert(e.message); }
+  };
+
+  const active = (rows || []).filter((m) => m.active);
+  const past = (rows || []).filter((m) => !m.active);
+  const taken = new Set(active.map((m) => m.hostId));
+
+  return (
+    <GoModal open onClose={onClose} title={`Vakolatlar · ${agent.name}`} width={560}>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 14, lineHeight: 1.5 }}>
+        Vakil faqat shu ro'yxatdagi mulkdorlarning ma'lumotlarini ko'radi. Bekor qilingan vakolat
+        darhol kuchga kiradi — keyingi so'rovdanoq.
+      </div>
+
+      {active.map((m) => (
+        <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 13px', marginBottom: 8,
+          background: 'var(--g-bg-2)', borderRadius: 11 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{m.host?.name}</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>
+              {m.capabilities?.length ? m.capabilities.join(' · ') : "faqat ko'rish"}
+              {m.commissionPct != null && ` · ${m.commissionPct}%`}
+            </div>
+          </div>
+          <Btn kind="ghost" sm onClick={() => revoke(m)}>Bekor qilish</Btn>
+        </div>
+      ))}
+      {rows && !active.length && (
+        <div style={{ padding: '11px 13px', marginBottom: 8, borderRadius: 11, background: 'var(--g-bg-2)',
+          font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+          Hech qanday vakolat yo'q — bu vakil hozir hech narsani ko'ra olmaydi.
+        </div>
+      )}
+
+      <div style={{ borderTop: '1px solid var(--g-line)', marginTop: 14, paddingTop: 14 }}>
+        <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 8 }}>Yangi vakolat</div>
+        <select className="adm-select" style={{ width: '100%', marginBottom: 10 }} value={f.hostId}
+          onChange={(e) => setF({ ...f, hostId: e.target.value })}>
+          <option value="">Mulkdorni tanlang…</option>
+          {hosts.filter((h) => !taken.has(h.id)).map((h) => (
+            <option key={h.id} value={h.id}>{h.name} · {h.org}</option>
+          ))}
+        </select>
+        {Object.entries(CAPABILITY_LABELS).map(([cap, label]) => (
+          <label key={cap} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 7, cursor: 'pointer',
+            font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+            <input type="checkbox" checked={f.capabilities.includes(cap)} onChange={() => toggle(cap)} />
+            {label}
+          </label>
+        ))}
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '2px 0 10px' }}>
+          Hech biri belgilanmasa — vakil faqat ko'ra oladi, hech narsani o'zgartira olmaydi.
+        </div>
+        <input className="adm-input" style={{ width: '100%' }} type="number" min="0" max="100"
+          placeholder="Komissiya % (ixtiyoriy — hisob-kitob tizimdan tashqarida)"
+          value={f.commissionPct} onChange={(e) => setF({ ...f, commissionPct: e.target.value })} />
+        {err && <div style={{ marginTop: 10, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+        <Btn kind="primary" style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
+          disabled={!f.hostId || busy} onClick={grant}>{busy ? '…' : 'Vakolat berish'}</Btn>
+      </div>
+
+      {past.length > 0 && (
+        <div style={{ borderTop: '1px solid var(--g-line)', marginTop: 14, paddingTop: 12 }}>
+          <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 8 }}>Bekor qilinganlar</div>
+          {past.map((m) => (
+            <div key={m.id} style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 6 }}>
+              {m.host?.name} — {fmtDate(m.revokedAt)} · {m.revokeReason}
+            </div>
+          ))}
+        </div>
+      )}
+    </GoModal>
   );
 }
 
