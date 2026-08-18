@@ -4293,10 +4293,20 @@ function BuildingForm({ building, role, onClose, onCreated }) {
   const [kadastrFile, setKadastrFile] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  // A broker acting for several owners has to say whose building this is —
+  // the server refuses to guess, because a building belonging to nobody is
+  // invisible to the owner it was meant for. One mandate needs no question.
+  const [myHosts, setMyHosts] = React.useState([]);
+  React.useEffect(() => {
+    if (role !== 'agent' || isEdit) return;
+    api.get('/agents/me/hosts').then((r) => setMyHosts(r.hosts || [])).catch(() => {});
+  }, [role, isEdit]);
+  const mustPickHost = role === 'agent' && !isEdit && myHosts.length > 1;
   const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
 
   const submit = async () => {
     if (!f.name.trim() || !f.address.trim() || !f.ownerName.trim()) { window.alert("Bino nomi, manzil va egasi to'ldirilishi shart"); return; }
+    if (mustPickHost && !f.hostId) { window.alert('Qaysi mulkdor uchun ekanini tanlang'); return; }
     setBusy(true);
     try {
       const payload = {
@@ -4310,6 +4320,7 @@ function BuildingForm({ building, role, onClose, onCreated }) {
         facilities: f.facilities,
         status: f.status,
         marketplace: f.marketplace,
+        ...(mustPickHost ? { hostId: f.hostId } : {}),
       };
       const saved = isEdit ? await api.patch(`/buildings/${building.id}`, payload) : await api.post('/buildings', payload);
       if (kadastrFile) await api.upload(`/buildings/${saved.id}/kadastr`, kadastrFile);
@@ -4342,6 +4353,19 @@ function BuildingForm({ building, role, onClose, onCreated }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         <Card>
           <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 16 }}>{isEdit ? 'Binoni tahrirlash' : 'Yangi bino'}</div>
+          {mustPickHost && (
+            <div style={{ marginBottom: 14 }}>
+              <Label>Mulkdor</Label>
+              <select className="adm-select" style={{ width: '100%' }} value={f.hostId || ''}
+                onChange={(e) => set('hostId', e.target.value)}>
+                <option value="">Tanlang…</option>
+                {myHosts.map((h) => <option key={h.hostId} value={h.hostId}>{h.name} · {h.org}</option>)}
+              </select>
+              <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 5 }}>
+                Siz bir nechta mulkdor nomidan ish yuritasiz — bu bino kimniki ekanini belgilang.
+              </div>
+            </div>
+          )}
           <div style={{ marginBottom: 14 }}>
             <Label>Bino nomi</Label>
             <input className="adm-input" value={f.name} onChange={(e) => set('name', e.target.value)} placeholder="Yunusobod biznes minorasi" />
