@@ -7240,6 +7240,9 @@ function StatementDetailDrawer({ s, role, onClose, onApprove, onPay }) {
             ['Yalpi tushum', window.fmtSom(s.gross) + " so'm"],
             ['Platforma komissiyasi', '− ' + window.fmtSom(s.commission) + " so'm"],
             ['Mezbon xizmat haqi', '− ' + window.fmtSom(s.hostFee) + " so'm"],
+            // Only when there is one. An owner with no broker should not read a
+            // line item for something they have never heard of.
+            ...(s.agentFee > 0 ? [['Vakil komissiyasi', '− ' + window.fmtSom(s.agentFee) + " so'm"]] : []),
           ].map(([k, v]) => (
             <div key={k} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 9, font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
               <span>{k}</span><span style={{ color: 'var(--g-ink-2)', fontWeight: 500 }}>{v}</span>
@@ -7298,6 +7301,66 @@ function StatementDetailDrawer({ s, role, onClose, onApprove, onPay }) {
   );
 }
 
+// ── Broker earnings ─────────────────────────────────────────────
+// The other side of the same deduction: every so'm here came off some owner's
+// `agentFee` in the payout beside it. Generated together (POST
+// /payout-statements/generate does both), so this panel only reads and settles
+// — there is no separate "generate" for it, which is the point.
+function AgentStatementsPanel({ role, period }) {
+  const [rows, setRows] = React.useState(null);
+  const isPlatform = role === 'platform';
+
+  const load = React.useCallback(() => {
+    api.get(`/agents/statements?period=${encodeURIComponent(period)}`).then(setRows).catch(() => setRows([]));
+  }, [period]);
+  React.useEffect(() => { setRows(null); load(); }, [load]);
+
+  const approve = async (st) => {
+    try { await api.post(`/agents/statements/${st.id}/approve`); load(); } catch (e) { window.alert(e.message); }
+  };
+  const pay = async (st) => {
+    const ref = window.prompt("To'lov ma'lumotnomasi (reference, ixtiyoriy):", '');
+    if (ref === null) return;
+    try { await api.post(`/agents/statements/${st.id}/pay`, ref.trim() ? { reference: ref.trim() } : {}); load(); }
+    catch (e) { window.alert(e.message); }
+  };
+
+  if (rows && !rows.length) return null; // no brokers earned this period
+
+  const columns = [
+    ...(isPlatform ? [{ key: 'agent', label: 'Vakil', render: (r) => <PersonCell name={r.agent?.name || '—'} sub={r.agent?.org} /> }] : []),
+    { key: 'hosts', label: 'Mulkdorlar', render: (r) => (
+      <span style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+        {(r.lines || []).map((l) => `${l.hostId} · ${l.pct}%`).join(', ')}
+      </span>
+    ) },
+    { key: 'gross', label: 'Yalpi', align: 'right', render: (r) => <MoneyCell n={r.gross} /> },
+    { key: 'fee', label: 'Komissiya', align: 'right', render: (r) => (
+      <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>
+        {window.fmtSom(r.fee)} <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>so'm</span>
+      </div>
+    ) },
+    { key: 'status', label: window.AT.status, render: (r) => <StatusPill s={r.status} dict={window.STATEMENT_STATUS} /> },
+    ...(isPlatform ? [{ key: 'act', label: '', align: 'right', render: (r) => (
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        {r.status === 'draft' && <Btn kind="ghost" sm onClick={() => approve(r)}>Tasdiqlash</Btn>}
+        {r.status === 'approved' && <Btn kind="primary" sm onClick={() => pay(r)}>To'landi</Btn>}
+      </div>
+    ) }] : []),
+  ];
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 3 }}>Vakillar komissiyasi</div>
+      <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 12 }}>
+        Mulkdor to'lovidan ushlab qolinadi — yuqoridagi hisobotlarda "Vakil komissiyasi" satri.
+      </div>
+      {!rows ? <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>
+        : <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty="Bu davrda vakil komissiyasi yo'q" />}
+    </div>
+  );
+}
+
 function PayoutStatementsPanel({ role }) {
   const [period, setPeriod] = React.useState(currentInvoicePeriod());
   const [rows, setRows] = React.useState(null);
@@ -7336,6 +7399,9 @@ function PayoutStatementsPanel({ role }) {
       <div>
         <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{window.fmtSom(s.commission)}</div>
         <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1, whiteSpace: 'nowrap' }}>+ {window.fmtSom(s.hostFee)} xizmat haqi</div>
+        {s.agentFee > 0 && (
+          <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1, whiteSpace: 'nowrap' }}>+ {window.fmtSom(s.agentFee)} vakil</div>
+        )}
       </div>
     ) },
     { key: 'net', label: 'Sof', align: 'right', render: (s) => (
@@ -7369,12 +7435,14 @@ function PayoutStatementsPanel({ role }) {
         empty={rows ? "Bu davr uchun hisobotlar yo'q" : 'Yuklanmoqda…'} />
       <StatementDetailDrawer s={list.find((x) => x.id === detailId) || null} role={role}
         onClose={() => setDetailId(null)} onApprove={approve} onPay={pay} />
+      {/* Same period, same run — the broker side of the same money. */}
+      <AgentStatementsPanel role={role} period={period} />
     </div>
   );
 }
 
 Object.assign(window, {
-  GoModal, PaymentForm, ChargeForm, BookingMoneySections, DebtorsScreen,
+  AgentStatementsPanel, GoModal, PaymentForm, ChargeForm, BookingMoneySections, DebtorsScreen,
   DebtNotesPanel, DebtNoteForm, DebtDetailDrawer, DebtCalendarPanel, WorklistStrip,
   ContractsScreen, ContractDetailDrawer, ContractRenewModal,
   PayoutStatementsPanel, StatementDetailDrawer,
