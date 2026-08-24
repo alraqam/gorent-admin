@@ -695,6 +695,19 @@ function fmtSom(n) {
   // 8500000 -> "8 500 000"
   return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
 }
+// An amount with the currency it is actually in. A dollar lease shows dollars
+// where it was AGREED (the price, the term, the contract) and so'm everywhere
+// the money really moves (debt, payments, the ESF) — mixing the two silently is
+// how a tenant gets quoted a figure that is off by four orders of magnitude.
+function fmtMoney(n, currency) {
+  const v = fmtSom(Math.abs(Math.round(n)));
+  const sign = n < 0 ? '-' : '';
+  return currency === 'USD' ? `${sign}$${v}` : `${sign}${v} so'm`;
+}
+// Rates come from the API as hundredths of a so'm — 1185355 is 11 853.55.
+function fmtRate(r) {
+  return (r / 100).toFixed(2);
+}
 function fmtPrice(n, period, currency = 'UZS', lang = 'uz') {
   const periodMap = {
     month: { uz: "oyiga", ru: "в месяц", en: "/mo" },
@@ -757,7 +770,7 @@ function listingsByCat(cat) { return LISTINGS.filter((l) => !cat || l.cat === ca
 Object.assign(window, {
   GO, CATEGORIES, CITIES, DISTRICTS_TASHKENT, T,
   LISTINGS, MAP_POSITIONS, AMENITIES,
-  fmtSom, fmtPrice, listingsByCat,
+  fmtSom, fmtMoney, fmtRate, fmtPrice, listingsByCat,
 });
 
 // ============================================================
@@ -4067,7 +4080,7 @@ function BuildingsScreen({ search, role }) {
 function AddOfferingForm({ building, onDone }) {
   const offered = new Set((building.offerings || []).map((o) => o.productId || o.product?.id));
   const available = (window.PRODUCTS || []).filter((p) => !offered.has(p.id));
-  const [f, setF] = React.useState(() => ({ productId: (available[0] || {}).id || '', price: '', qty: 1, m2: '' }));
+  const [f, setF] = React.useState(() => ({ productId: (available[0] || {}).id || '', price: '', currency: 'UZS', qty: 1, m2: '' }));
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -4083,7 +4096,7 @@ function AddOfferingForm({ building, onDone }) {
     setErr(null); setBusy(true);
     try {
       await api.post('/offerings', {
-        buildingId: building.id, productId: f.productId, price: Number(f.price),
+        buildingId: building.id, productId: f.productId, price: Number(f.price), currency: f.currency,
         qty: spec.fungible ? (Number(f.qty) || 1) : 1,
         ...(f.m2 !== '' ? { m2: Number(f.m2) } : {}),
       });
@@ -4115,7 +4128,16 @@ function AddOfferingForm({ building, onDone }) {
         </div>
         <div>
           <Label>Narx ({window.priceUnitLabel(product)})</Label>
-          <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder={spec.priceBasis === 'per_m2' ? '150000' : '2500000'} />
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input className="adm-input" type="number" value={f.price} onChange={(e) => set('price', e.target.value)}
+              placeholder={f.currency === 'USD' ? '1500' : (spec.priceBasis === 'per_m2' ? '150000' : '2500000')} style={{ flex: 1, minWidth: 0 }} />
+            {/* Quoted in dollars, settled in so'm — every lease taken on this
+                offering inherits the choice and keeps it for its whole term. */}
+            <select className="adm-select" value={f.currency} onChange={(e) => set('currency', e.target.value)} style={{ width: 78 }}>
+              <option value="UZS">so'm</option>
+              <option value="USD">$</option>
+            </select>
+          </div>
         </div>
         {spec.fungible && (
           <div>
@@ -6479,6 +6501,28 @@ function ExportDebtorsBtn() {
   );
 }
 
+// Dollar leases with a month nobody has recorded a rate for.
+//
+// Loud on purpose. An unconvertible month is not a small error in the debt — it
+// is ABSENT from it, and a lease whose every month is stuck shows a zero
+// balance and drops off the arrears table altogether. The fix is one number in
+// Sozlamalar, and until someone enters it the totals on this screen are
+// understated by an amount nobody can compute.
+function RateGaps({ rows, totals }) {
+  if (!rows.length) return null;
+  const periods = (totals && totals.periods) || [];
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', marginBottom: 12,
+      borderRadius: 11, background: 'oklch(0.97 0.03 25)', border: '1px solid oklch(0.9 0.06 25)' }}>
+      <IconWarn size={16} style={{ color: 'oklch(0.5 0.16 25)', flexShrink: 0, marginTop: 1 }} />
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', lineHeight: 1.5 }}>
+        <b>{rows.length} ta dollar ijarasi</b> to'liq hisoblanmadi — {periods.join(', ')} uchun valyuta kursi kiritilmagan.
+        Bu oylar yuqoridagi summalarga <b>kirmagan</b>. Sozlamalar → Valyuta kurslari bo'limidan kiriting.
+      </div>
+    </div>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 };
@@ -6558,6 +6602,19 @@ function DebtorsScreen({ search }) {
     { key: 'expected', label: 'Hisoblangan', align: 'right', render: (r) => (
       <div style={{ whiteSpace: 'nowrap' }}>
         <MoneyCell n={r.expected} />
+        {/* A dollar lease is stated in so'm at each month's closing rate. Say
+            so, or the figure looks like the agreed price and is not. */}
+        {r.currency && r.currency !== 'UZS' && (
+          <div title="Ijara dollarda, har oy o'z kursida so'mga o'giriladi" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+            $ ijara
+          </div>
+        )}
+        {/* Missing, not low: these months are absent from the figure above. */}
+        {r.unconverted?.length > 0 && (
+          <div title={`Kurs kiritilmagan: ${r.unconverted.join(', ')}`} style={{ font: `600 11.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 1 }}>
+            {r.unconverted.length} oy kurssiz
+          </div>
+        )}
         {r.accruing > 0 && (
           <div title="Joriy oy — oy oxirida hisob-faktura qilinadi" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
             +{window.fmtSom(r.accruing)} joriy oy
@@ -6650,7 +6707,10 @@ function DebtorsScreen({ search }) {
         // Only on the current tab: these are live leases that need an operator
         // to draw up a contract or re-run the month end. A former tenant's
         // unbilled months are a backfill job, not a daily prompt.
-        <BillingGaps blocked={data.blocked || []} failed={totals.billingFailed || 0} />
+        <>
+          <RateGaps rows={data.unconvertible || []} totals={totals.unconvertible} />
+          <BillingGaps blocked={data.blocked || []} failed={totals.billingFailed || 0} />
+        </>
       )}
 
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} onRow={setDetail}
