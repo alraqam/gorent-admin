@@ -6523,6 +6523,307 @@ function RateGaps({ rows, totals }) {
   );
 }
 
+// ── Qarzdorlik → Bank ko'chirmasi ───────────────────────────
+// Reconciling the bank against the book: upload the statement the bank
+// exports, see which transfer belongs to which tenant, and record the
+// confirmed ones as payments.
+//
+// Always two steps. The first writes nothing — it only says whose the money
+// looks like — because a wrong match here does not merely misfile a row, it
+// clears a debt that was never paid and takes the tenant off the chase list.
+// So every transfer is shown to a person before anything is saved.
+
+const BANK_FILTERS = [
+  { id: 'all', label: 'Hammasi' },
+  { id: 'matched', label: 'Tanildi' },
+  { id: 'unmatched', label: 'Tanilmadi' },
+  { id: 'imported', label: 'Kiritilgan' },
+  { id: 'skip', label: "E'tiborsiz" },
+];
+
+// Why a row was set aside, in the operator's language. Skipped rows are still
+// listed: a statement whose rows do not add up to the file's own total is a
+// statement nobody can trust.
+const SKIP_LABEL = {
+  outgoing: 'chiqim',
+  budget: 'soliq qaytarmasi',
+  capital: 'ustav fond',
+  return: 'qaytarilgan',
+  self: "o'z hisobimiz",
+  bank: 'bank xarajati',
+};
+
+// What convinced the matcher. Shown on the row, because "why" is the only
+// thing that lets an operator disagree with it quickly.
+const WHY_LABEL = {
+  contract: (d) => `shartnoma ${d}`,
+  account: () => 'hisob raqami',
+  name: () => 'nomi',
+  name_partial: () => 'nomi (qisman)',
+  // The one that earns its place: a contract number pointing at a tenant whose
+  // name is nothing like the payer's. Either they renamed themselves, or the
+  // number is somebody else's — and only a person can tell those apart.
+  name_mismatch: (d) => `nomi mos emas (${d})`,
+  period: (d) => `davr ${d}`,
+  amount: () => 'summa',
+  sole_booking: () => 'yagona ijara',
+};
+
+const CONF_HUE = { high: 155, medium: 85, low: 55 };
+const CONF_LABEL = { high: 'aniq', medium: 'ehtimol', low: 'tekshiring' };
+
+function BankStatementPanel() {
+  const [file, setFile] = React.useState(null);
+  const [data, setData] = React.useState(null);
+  const [assign, setAssign] = React.useState({});
+  const [filter, setFilter] = React.useState('all');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const [done, setDone] = React.useState(null);
+  const inputRef = React.useRef(null);
+
+  // Every lease that could receive money, for the override dropdown. The
+  // matcher's own candidates come first on each row; this is the fallback for
+  // a transfer it could not place at all.
+  // Mirrors the server's own list of leases that can receive money: a booking
+  // still awaiting confirmation would be refused on import, and offering it
+  // here would turn that refusal into a row the operator thinks they filed.
+  const PAYABLE = ['active', 'confirmed', 'completed', 'cancelled'];
+  const allBookings = React.useMemo(() => (window.BOOKINGS || [])
+    .filter((b) => PAYABLE.includes(b.status))
+    .map((b) => ({
+      id: b.id,
+      label: `${b.customer}${b.companyRef?.name ? ` · ${b.companyRef.name}` : ''} · ${b.unit?.offering?.building?.name || ''} ${b.unit?.name || ''} · ${b.id}`,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label)), [window.BOOKINGS]);
+
+  const load = async (f) => {
+    setFile(f); setData(null); setAssign({}); setDone(null); setErr(null);
+    if (!f) return;
+    setBusy(true);
+    try {
+      const res = await api.upload('/bank/statement/preview', f);
+      setData(res);
+      // Pre-fill only what the matcher was sure of. An ambiguous row is left
+      // blank on purpose: the dropdown is right there, and choosing for the
+      // operator would hide the fact that there was a choice to make.
+      const next = {};
+      for (const r of res.rows) if (r.status === 'matched' && r.suggestion) next[r.docNo] = r.suggestion.bookingId;
+      setAssign(next);
+    } catch (e) { setErr(e?.message || "Faylni o'qib bo'lmadi"); }
+    finally { setBusy(false); }
+  };
+
+  const importable = (data?.rows || [])
+    .filter((r) => r.status !== 'imported' && r.direction === 'credit' && assign[r.docNo]);
+  const importSum = importable.reduce((sum, r) => sum + r.amount, 0);
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const picked = {};
+      for (const r of importable) picked[r.docNo] = assign[r.docNo];
+      const res = await api.upload('/bank/statement/import', file, { assign: picked });
+      setDone(res);
+      // The debtors list on screen is now wrong — this money came off it.
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      // Re-read the same file, so what is on screen is what is in the database:
+      // the imported rows come back marked as such.
+      setData(await api.upload('/bank/statement/preview', file));
+      setAssign({});
+    } catch (e) { setErr(e?.message || 'Import bajarilmadi'); }
+    finally { setBusy(false); }
+  };
+
+  const reset = () => {
+    setFile(null); setData(null); setAssign({}); setDone(null); setErr(null);
+    if (inputRef.current) inputRef.current.value = '';
+  };
+
+  const s = data?.summary;
+  const rows = (data?.rows || []).filter((r) => filter === 'all'
+    || (filter === 'matched' ? r.status === 'matched' || r.status === 'ambiguous' : r.status === filter));
+
+  const columns = [
+    { key: 'date', label: 'Sana', w: 100, render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{fmtDate(r.date)}</div>
+        <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', fontFamily: 'ui-monospace, monospace' }}>{r.docNo}</div>
+      </div>
+    ) },
+    { key: 'payer', label: "To'lovchi", render: (r) => (
+      <div style={{ minWidth: 0, maxWidth: 260 }}>
+        <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {r.payerName || '—'}
+        </div>
+        <div title={r.purpose} style={{
+          font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2, lineHeight: 1.4,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>{r.purpose}</div>
+      </div>
+    ) },
+    { key: 'amount', label: 'Summa', align: 'right', w: 130, render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <div style={{ font: `700 13.5px ${window.GO.font}`, color: r.direction === 'debit' ? 'var(--g-ink-4)' : 'var(--g-ink)' }}>
+          {r.direction === 'debit' ? '−' : ''}{window.fmtSom(r.amount)}
+        </div>
+        {r.period && <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.period}</div>}
+      </div>
+    ) },
+    { key: 'tenant', label: 'Ijarachi', w: 300, render: (r) => {
+      if (r.status === 'imported') {
+        return (
+          <div>
+            <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+              {r.suggestion ? `${r.suggestion.customer} · ${r.suggestion.building}` : '—'}
+            </div>
+            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1, fontFamily: 'ui-monospace, monospace' }}>{r.paymentId}</div>
+          </div>
+        );
+      }
+      if (r.status === 'skip') return <span style={{ color: 'var(--g-ink-4)', font: `400 12.5px ${window.GO.font}` }}>—</span>;
+      // Candidates first, then every lease — a transfer the matcher could not
+      // place still has to be placeable without leaving the screen.
+      const suggested = new Set((r.candidates || []).map((c) => c.bookingId));
+      return (
+        <select className="adm-select" style={{ width: '100%', maxWidth: 290 }} value={assign[r.docNo] || ''}
+          onChange={(e) => setAssign((a) => ({ ...a, [r.docNo]: e.target.value }))}>
+          <option value="">— tanlanmagan —</option>
+          {!!r.candidates?.length && (
+            <optgroup label="Taklif">
+              {r.candidates.map((c) => (
+                <option key={c.bookingId} value={c.bookingId}>
+                  {c.customer}{c.company ? ` · ${c.company}` : ''} · {c.building} {c.unit}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <optgroup label="Barcha bandlovlar">
+            {allBookings.filter((b) => !suggested.has(b.id)).map((b) => (
+              <option key={b.id} value={b.id}>{b.label}</option>
+            ))}
+          </optgroup>
+        </select>
+      );
+    } },
+    { key: 'state', label: 'Holat', w: 150, render: (r) => {
+      if (r.status === 'imported') return <Chip hue={155}>kiritilgan</Chip>;
+      if (r.status === 'skip') return <Chip hue={250}>{SKIP_LABEL[r.skipReason] || "e'tiborsiz"}</Chip>;
+      if (r.status === 'unmatched') return <Chip hue={25}>tanilmadi</Chip>;
+      const why = (r.suggestion || r.candidates?.[0])?.why || [];
+      return (
+        <div>
+          <Chip hue={CONF_HUE[r.confidence] || 55}>{CONF_LABEL[r.confidence] || 'tekshiring'}</Chip>
+          {!!why.length && (
+            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>
+              {why.map((w) => (WHY_LABEL[w.signal] || (() => w.signal))(w.detail)).join(' · ')}
+            </div>
+          )}
+        </div>
+      );
+    } },
+  ];
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
+          <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconWallet size={16} /></span>
+          <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)' }}>Bank ko'chirmasini yuklash</div>
+        </div>
+        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 12, lineHeight: 1.55 }}>
+          Klient-Bankdan yuklab olingan <b>.xlsx</b> faylni o'zgartirmasdan tanlang. Har bir kirim to'lovi
+          shartnoma raqami, to'lovchi hisob raqami va nomi bo'yicha ijarachiga bog'lanadi — siz tasdiqlagandan
+          keyingina to'lov sifatida yoziladi. Bir marta kiritilgan to'lov ikkinchi marta kirmaydi.
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <input ref={inputRef} type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={(e) => load(e.target.files?.[0] || null)}
+            style={{ font: `400 12.5px ${window.GO.font}` }} />
+          {file && <Btn kind="ghost" sm onClick={reset}>Tozalash</Btn>}
+        </div>
+
+        {err && <div style={{ marginTop: 10, font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+        {busy && !data && <div style={{ marginTop: 10, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>O'qilmoqda…</div>}
+
+        {data?.meta && (
+          <div style={{
+            marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--g-line)', display: 'flex', gap: 20,
+            flexWrap: 'wrap', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)',
+          }}>
+            {data.meta.owner && <span>{data.meta.owner}</span>}
+            {data.meta.account && <span style={{ fontFamily: 'ui-monospace, monospace' }}>{data.meta.account}</span>}
+            {data.meta.from && <span>{fmtDate(data.meta.from)} – {fmtDate(data.meta.to)}</span>}
+            <span>{s?.rows} ta amaliyot</span>
+          </div>
+        )}
+
+        {/* Named, not counted away: a row this parser could not read is money
+            the operator has to place by hand, and silence would hide it. */}
+        {!!data?.invalid?.length && (
+          <div style={{ marginTop: 10, font: `400 11.5px ${window.GO.font}`, color: 'oklch(0.48 0.14 55)' }}>
+            {data.invalid.length} ta satr o'qilmadi: {data.invalid.slice(0, 3).map((i) => `${i.line}-satr (${i.reason})`).join(', ')}
+          </div>
+        )}
+      </Card>
+
+      {done && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '13px 15px', marginBottom: 16,
+          borderRadius: 11, background: 'oklch(0.97 0.03 155)', border: '1px solid oklch(0.88 0.07 155)',
+        }}>
+          <IconCheckCirc size={16} style={{ color: 'oklch(0.45 0.14 155)', flexShrink: 0, marginTop: 1 }} />
+          <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', lineHeight: 1.5 }}>
+            <b>{done.created} ta to'lov</b> kiritildi — {window.fmtSom(done.createdSum)} so'm.
+            {done.skipped > 0 && <> {done.skipped} ta satr o'tkazib yuborildi.</>}
+            {done.learnedAccounts > 0 && <> {done.learnedAccounts} ta hisob raqami eslab qolindi — keyingi ko'chirma aniqroq tanaladi.</>}
+          </div>
+        </div>
+      )}
+
+      {data && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
+            <MoneyStatCard icon={<IconWallet size={17} />} label="Kirim jami" value={window.fmtCompactSom(s.creditSum)} />
+            <MoneyStatCard icon={<IconCheckCirc size={17} />} label="Ijarachi topildi" value={window.fmtCompactSom(s.matchedSum)} color="oklch(0.5 0.13 155)" />
+            <MoneyStatCard icon={<IconWarn size={17} />} label="Tanilmadi" value={window.fmtCompactSom(s.unmatchedSum)} color={s.unmatchedSum ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)'} />
+            <MoneyStatCard icon={<IconDoc size={17} />} label="Allaqachon kiritilgan" value={window.fmtCompactSom(s.importedSum)} color="var(--g-ink-3)" />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {BANK_FILTERS.map((f) => {
+                const n = f.id === 'all' ? data.rows.length
+                  : f.id === 'matched' ? s.matched + s.ambiguous
+                  : f.id === 'unmatched' ? s.unmatched
+                  : f.id === 'imported' ? s.imported : s.skipped;
+                const on = filter === f.id;
+                return (
+                  <button key={f.id} onClick={() => setFilter(f.id)} style={{
+                    padding: '7px 13px', borderRadius: 999, cursor: 'pointer',
+                    border: `1px solid ${on ? 'var(--g-brand)' : 'var(--g-line)'}`,
+                    background: on ? 'var(--g-brand-soft)' : 'transparent',
+                    color: on ? 'var(--g-brand-ink)' : 'var(--g-ink-3)',
+                    font: `600 12.5px ${window.GO.font}`,
+                  }}>{f.label} · {n}</button>
+                );
+              })}
+            </div>
+            <Btn kind="primary" sm disabled={busy || !importable.length} onClick={run}>
+              {busy ? 'Kiritilmoqda…' : importable.length
+                ? `${importable.length} ta to'lovni kiritish · ${window.fmtSom(importSum)} so'm`
+                : 'Kiritish uchun qator tanlang'}
+            </Btn>
+          </div>
+
+          <DataTable columns={columns} rows={rows} rowKey={(r) => r.docNo} empty="Bu bo'limda satr yo'q" />
+        </>
+      )}
+    </div>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 };
@@ -6662,6 +6963,10 @@ function DebtorsScreen({ search }) {
             // Host-visible too: the calendar is their own leases and their own
             // follow-ups, scoped server-side.
             { id: 'calendar', label: 'Kalendar' },
+            // Host-visible: a host reconciling their own bank statement sees
+            // only their own leases in the match dropdown, scoped server-side
+            // like everything else on this screen.
+            { id: 'bank', label: "Bank ko'chirmasi" },
             ...(isPlatform ? [{ id: 'reminders', label: 'Eslatmalar' }, { id: 'blacklist', label: "Qora ro'yxat" }] : []),
           ].map((t) => {
             const on = tab === t.id;
@@ -6682,6 +6987,7 @@ function DebtorsScreen({ search }) {
 
       {tab === 'blacklist' && isPlatform ? <BlacklistPanel search={search} /> :
        tab === 'reminders' && isPlatform ? <RemindersPanel /> :
+       tab === 'bank' ? <BankStatementPanel /> :
        tab === 'calendar' ? <DebtCalendarPanel onOpen={openBooking} /> : (
       <>
       <WorklistStrip onOpen={openBooking} version={noteVersion} />

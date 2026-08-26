@@ -68,12 +68,22 @@ const patch = (path, body) => request(path, { method: 'PATCH', body: body ? JSON
 const del = (path, body) => request(path, { method: 'DELETE', body: body ? JSON.stringify(body) : undefined });
 
 // Multipart upload — must NOT set Content-Type (the browser adds the boundary).
-async function upload(path, file, fieldName = 'file') {
+//
+// `fields` rides alongside the file for endpoints that need both. The bank
+// statement import is the reason: the operator's row-to-tenant choices travel
+// with the statement itself, so the server can re-read every amount from the
+// bank's own file instead of trusting numbers posted back by the browser.
+// Objects and arrays are JSON-encoded — multipart carries only strings.
+async function upload(path, file, fields = null, fieldName = 'file') {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const fd = new FormData();
   fd.append(fieldName, file);
+  for (const [k, v] of Object.entries(fields || {})) {
+    if (v === undefined || v === null) continue;
+    fd.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+  }
   const res = await fetch(BASE + path, { method: 'POST', headers, body: fd });
   const text = await res.text();
   let data = null;
