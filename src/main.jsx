@@ -6576,6 +6576,28 @@ const WHY_LABEL = {
 };
 
 const CONF_HUE = { high: 155, medium: 85, low: 55 };
+
+// How a lease is named, everywhere it is named.
+//
+// WHO comes first and is never dropped. The column is headed «Ijarachi», and
+// the operator's whole job at this step is confirming the tool credited the
+// right tenant — a line that reads "AI SPACE YASHNABOD Ofis 18kv" answers a
+// question nobody asked. The place and the id come after, because a tenant with
+// five identical virtual-office leases needs them to tell one from another.
+function leaseLabel(c) {
+  const who = [c.customer, c.company].filter(Boolean).join(' · ') || c.bookingId;
+  const place = [c.building, c.unit].filter(Boolean).join(' ');
+  return place ? `${who} — ${place}` : who;
+}
+
+// The same, plus what the lease owes: the part that tells a tenant's several
+// leases apart once you already know it is the right tenant.
+function leaseOption(c) {
+  const debt = c.outstanding > 0
+    ? ` · qarz ${window.fmtSom(c.outstanding)}${c.overdueSince ? ` (${fmtDate(c.overdueSince)} dan)` : ''}`
+    : '';
+  return `${leaseLabel(c)} · ${c.bookingId}${debt}`;
+}
 const CONF_LABEL = { high: 'aniq', medium: 'ehtimol', low: 'tekshiring' };
 
 // ── Import history ────────────────────────────────────────────────────
@@ -6794,10 +6816,7 @@ function SplitEditor({ row, leases, value, onCancel, onSave }) {
                 onChange={(e) => set(i, { bookingId: e.target.value })}>
                 <option value="">— ijarani tanlang —</option>
                 {leases.map((c) => (
-                  <option key={c.bookingId} value={c.bookingId}>
-                    {c.building} {c.unit} · {c.bookingId}
-                    {c.outstanding > 0 ? ` · qarz ${window.fmtSom(c.outstanding)}` : " · qarz yo'q"}
-                  </option>
+                  <option key={c.bookingId} value={c.bookingId}>{leaseOption(c)}</option>
                 ))}
               </select>
               {l && l.overdueSince && (
@@ -6863,10 +6882,15 @@ function BankStatementPanel() {
   const allBookings = React.useMemo(() => (window.BOOKINGS || [])
     .filter((b) => PAYABLE.includes(b.status))
     .map((b) => ({
-      id: b.id,
-      label: `${b.customer}${b.companyRef?.name ? ` · ${b.companyRef.name}` : ''} · ${b.unit?.offering?.building?.name || ''} ${b.unit?.name || ''} · ${b.id}`,
+      bookingId: b.id,
+      customer: b.customer,
+      company: b.companyRef?.name || null,
+      building: b.unit?.offering?.building?.name || '',
+      unit: b.unit?.name || '',
+      outstanding: 0,
+      overdueSince: null,
     }))
-    .sort((a, b) => a.label.localeCompare(b.label)), [window.BOOKINGS]);
+    .sort((a, b) => leaseLabel(a).localeCompare(leaseLabel(b))), [window.BOOKINGS]);
 
   const load = async (f) => {
     setFile(f); setData(null); setAssign({}); setDone(null); setErr(null);
@@ -6978,10 +7002,10 @@ function BankStatementPanel() {
           <div>
             {split.map((part) => {
               const c = (r.candidates || []).find((x) => x.bookingId === part.bookingId)
-                || allBookings.find((b) => b.id === part.bookingId);
+                || allBookings.find((b) => b.bookingId === part.bookingId);
               return (
                 <div key={part.bookingId} style={{ font: `500 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 2 }}>
-                  {window.fmtSom(part.amount)} → {c?.unit ? `${c.building} ${c.unit}` : part.bookingId}
+                  {window.fmtSom(part.amount)} → {c ? leaseLabel(c) : part.bookingId}
                 </div>
               );
             })}
@@ -6995,9 +7019,22 @@ function BankStatementPanel() {
       // Candidates first, then every lease — a transfer the matcher could not
       // place still has to be placeable without leaving the screen.
       const suggested = new Set((r.candidates || []).map((c) => c.bookingId));
+      const chosenId = typeof assign[r.docNo] === 'string' ? assign[r.docNo] : '';
+      const chosen = chosenId
+        && ((r.candidates || []).find((c) => c.bookingId === chosenId)
+          || allBookings.find((b) => b.bookingId === chosenId));
       return (
         <div>
-        <select className="adm-select" style={{ width: '100%', maxWidth: 290 }} value={typeof assign[r.docNo] === 'string' ? assign[r.docNo] : ''}
+        {/* Who this transfer is being credited to, readable straight down the
+            column without opening anything. The select below decides WHICH of
+            that tenant's leases; this answers the question the column is
+            headed with. */}
+        {chosen && (
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 4, lineHeight: 1.35 }}>
+            {[chosen.customer, chosen.company].filter(Boolean).join(' · ')}
+          </div>
+        )}
+        <select className="adm-select" style={{ width: '100%', maxWidth: 290 }} value={chosenId}
           onChange={(e) => setAssign((a) => ({ ...a, [r.docNo]: e.target.value }))}>
           <option value="">— tanlanmagan —</option>
           {/* The booking id and the debt are what tell one option from another.
@@ -7007,17 +7044,13 @@ function BankStatementPanel() {
           {!!r.candidates?.length && (
             <optgroup label="Taklif">
               {r.candidates.map((c) => (
-                <option key={c.bookingId} value={c.bookingId}>
-                  {c.building} {c.unit} · {c.bookingId}
-                  {c.outstanding > 0 ? ` · qarz ${window.fmtSom(c.outstanding)}` : " · qarz yo'q"}
-                  {c.overdueSince ? ` (${fmtDate(c.overdueSince)} dan)` : ''}
-                </option>
+                <option key={c.bookingId} value={c.bookingId}>{leaseOption(c)}</option>
               ))}
             </optgroup>
           )}
           <optgroup label="Barcha bandlovlar">
-            {allBookings.filter((b) => !suggested.has(b.id)).map((b) => (
-              <option key={b.id} value={b.id}>{b.label}</option>
+            {allBookings.filter((b) => !suggested.has(b.bookingId)).map((b) => (
+              <option key={b.bookingId} value={b.bookingId}>{leaseOption(b)}</option>
             ))}
           </optgroup>
         </select>
@@ -7173,9 +7206,7 @@ function BankStatementPanel() {
             // occasionally pays for a lease the matcher never considered.
             leases={[
               ...(splitting.candidates || []),
-              ...allBookings
-                .filter((b) => !(splitting.candidates || []).some((c) => c.bookingId === b.id))
-                .map((b) => ({ bookingId: b.id, building: b.label, unit: '', outstanding: 0, overdueSince: null })),
+              ...allBookings.filter((b) => !(splitting.candidates || []).some((c) => c.bookingId === b.bookingId)),
             ]}
             value={Array.isArray(assign[splitting.docNo]) ? assign[splitting.docNo] : null}
             onCancel={() => setSplitting(null)}
