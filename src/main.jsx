@@ -6875,11 +6875,24 @@ function BankStatementPanel() {
     try {
       const res = await api.upload('/bank/statement/preview', f);
       setData(res);
-      // Pre-fill only what the matcher was sure of. An ambiguous row is left
-      // blank on purpose: the dropdown is right there, and choosing for the
-      // operator would hide the fact that there was a choice to make.
+      // Pre-fill what the matcher was sure of. An ambiguous row is left blank on
+      // purpose: the dropdown is right there, and choosing for the operator
+      // would hide that there was a choice to make.
+      //
+      // A PROPOSED SPLIT IS PRE-FILLED AS THE SPLIT. Filling in only its first
+      // lease was a real bug that reached production: the server worked out
+      // that one transfer settled two contracts, the row offered the split
+      // behind a link nobody had to click, and pressing Kiritish sent the whole
+      // amount to a single lease — leaving it in credit while the other stayed
+      // in arrears, which is the exact failure the allocation exists to
+      // prevent. Proposing something and then not doing it is worse than not
+      // proposing it.
       const next = {};
-      for (const r of res.rows) if (r.status === 'matched' && r.suggestion) next[r.docNo] = r.suggestion.bookingId;
+      for (const r of res.rows) {
+        if (r.status !== 'matched') continue;
+        if (r.allocation?.length > 1) next[r.docNo] = r.allocation.map((a) => ({ bookingId: a.bookingId, amount: a.amount }));
+        else if (r.suggestion) next[r.docNo] = r.suggestion.bookingId;
+      }
       setAssign(next);
     } catch (e) { setErr(e?.message || "Faylni o'qib bo'lmadi"); }
     finally { setBusy(false); }
