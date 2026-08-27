@@ -6570,10 +6570,101 @@ const WHY_LABEL = {
   period: (d) => `davr ${d}`,
   amount: () => 'summa',
   sole_booking: () => 'yagona ijara',
+  // Shown when a tenant has several leases and the transfer named none of them:
+  // the money goes to the oldest arrears, and the row says so out loud.
+  oldest_debt: (d) => `eng eski qarz${d ? ` · ${fmtDate(d)} dan` : ''}`,
 };
 
 const CONF_HUE = { high: 155, medium: 85, low: 55 };
 const CONF_LABEL = { high: 'aniq', medium: 'ehtimol', low: 'tekshiring' };
+
+// One transfer, divided across the leases it pays for.
+//
+// A company settles several of its contracts with a single payment — that is
+// simply how they pay — so the operator needs to place the money, not choose
+// one lease and lose the rest. Opens pre-filled with the server's proposal
+// (oldest arrears first) and will not close until the parts add up to the
+// transfer exactly, because a statement that does not reconcile is the one
+// outcome this screen exists to prevent.
+function SplitEditor({ row, leases, value, onCancel, onSave }) {
+  const initial = (value && value.length ? value : row.allocation) || [];
+  const [parts, setParts] = React.useState(
+    initial.length ? initial.map((a) => ({ bookingId: a.bookingId, amount: a.amount })) : [{ bookingId: '', amount: row.amount }],
+  );
+
+  const total = parts.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const left = row.amount - total;
+  const named = parts.filter((p) => p.bookingId);
+  const dupes = new Set(named.map((p) => p.bookingId)).size !== named.length;
+  const ok = left === 0 && named.length === parts.length && parts.length > 0
+    && parts.every((p) => Number.isInteger(Number(p.amount)) && Number(p.amount) > 0) && !dupes;
+
+  const set = (i, patch) => setParts((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const drop = (i) => setParts((ps) => ps.filter((_, j) => j !== i));
+  const add = () => setParts((ps) => [...ps, { bookingId: '', amount: Math.max(0, row.amount - ps.reduce((s, p) => s + (Number(p.amount) || 0), 0)) }]);
+
+  const lease = (id) => leases.find((l) => l.bookingId === id);
+
+  return (
+    <div>
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', marginBottom: 14, lineHeight: 1.55 }}>
+        <b>{row.payerName}</b> · {fmtDate(row.date)} · <b>{window.fmtSom(row.amount)} so'm</b>
+        <div style={{ marginTop: 4, color: 'var(--g-ink-4)' }}>{row.purpose}</div>
+      </div>
+
+      {parts.map((p, i) => {
+        const l = lease(p.bookingId);
+        return (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 150px 32px', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+            <div>
+              <select className="adm-select" style={{ width: '100%' }} value={p.bookingId}
+                onChange={(e) => set(i, { bookingId: e.target.value })}>
+                <option value="">— ijarani tanlang —</option>
+                {leases.map((c) => (
+                  <option key={c.bookingId} value={c.bookingId}>
+                    {c.building} {c.unit} · {c.bookingId}
+                    {c.outstanding > 0 ? ` · qarz ${window.fmtSom(c.outstanding)}` : " · qarz yo'q"}
+                  </option>
+                ))}
+              </select>
+              {l && l.overdueSince && (
+                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>
+                  {fmtDate(l.overdueSince)} dan qarzda
+                </div>
+              )}
+            </div>
+            <input className="adm-input" type="number" min={1} value={p.amount}
+              onChange={(e) => set(i, { amount: e.target.value === '' ? '' : Number(e.target.value) })} />
+            <Btn kind="ghost" sm disabled={parts.length < 2} onClick={() => drop(i)}>×</Btn>
+          </div>
+        );
+      })}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
+        <Btn kind="ghost" sm onClick={add}>+ Ijara qo'shish</Btn>
+        {/* The remainder, always visible: the operator should never have to add
+            the column up themselves to find out why Saqlash is disabled. */}
+        <div style={{ font: `600 12.5px ${window.GO.font}`, color: left === 0 ? 'oklch(0.45 0.13 155)' : 'oklch(0.5 0.16 25)' }}>
+          {left === 0 ? "To'liq taqsimlandi" : left > 0
+            ? `Taqsimlanmagan: ${window.fmtSom(left)} so'm`
+            : `Ortiqcha: ${window.fmtSom(-left)} so'm`}
+        </div>
+      </div>
+      {dupes && (
+        <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+          Bitta ijara ikki marta tanlangan.
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+        <Btn kind="ghost" sm onClick={onCancel}>Bekor qilish</Btn>
+        <Btn kind="primary" sm disabled={!ok} onClick={() => onSave(parts.map((p) => ({ bookingId: p.bookingId, amount: Number(p.amount) })))}>
+          Saqlash
+        </Btn>
+      </div>
+    </div>
+  );
+}
 
 function BankStatementPanel() {
   const [file, setFile] = React.useState(null);
@@ -6583,6 +6674,7 @@ function BankStatementPanel() {
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
   const [done, setDone] = React.useState(null);
+  const [splitting, setSplitting] = React.useState(null); // row → split editor
   const inputRef = React.useRef(null);
 
   // Every lease that could receive money, for the override dropdown. The
@@ -6617,15 +6709,20 @@ function BankStatementPanel() {
     finally { setBusy(false); }
   };
 
+  // An assignment is either a booking id (whole transfer) or a list of parts.
+  const assigned = (r) => {
+    const v = assign[r.docNo];
+    return Array.isArray(v) ? (v.length ? v : null) : (v || null);
+  };
   const importable = (data?.rows || [])
-    .filter((r) => r.status !== 'imported' && r.direction === 'credit' && assign[r.docNo]);
+    .filter((r) => r.status !== 'imported' && r.direction === 'credit' && assigned(r));
   const importSum = importable.reduce((sum, r) => sum + r.amount, 0);
 
   const run = async () => {
     setBusy(true); setErr(null);
     try {
       const picked = {};
-      for (const r of importable) picked[r.docNo] = assign[r.docNo];
+      for (const r of importable) picked[r.docNo] = assigned(r);
       const res = await api.upload('/bank/statement/import', file, { assign: picked });
       setDone(res);
       // The debtors list on screen is now wrong — this money came off it.
@@ -6685,18 +6782,45 @@ function BankStatementPanel() {
         );
       }
       if (r.status === 'skip') return <span style={{ color: 'var(--g-ink-4)', font: `400 12.5px ${window.GO.font}` }}>—</span>;
+      const split = Array.isArray(assign[r.docNo]) ? assign[r.docNo] : null;
+      if (split) {
+        return (
+          <div>
+            {split.map((part) => {
+              const c = (r.candidates || []).find((x) => x.bookingId === part.bookingId)
+                || allBookings.find((b) => b.id === part.bookingId);
+              return (
+                <div key={part.bookingId} style={{ font: `500 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 2 }}>
+                  {window.fmtSom(part.amount)} → {c?.unit ? `${c.building} ${c.unit}` : part.bookingId}
+                </div>
+              );
+            })}
+            <button onClick={() => setSplitting(r)} style={{
+              border: 0, background: 'transparent', padding: 0, cursor: 'pointer', marginTop: 2,
+              font: `600 11.5px ${window.GO.font}`, color: 'var(--g-brand-ink)',
+            }}>O'zgartirish</button>
+          </div>
+        );
+      }
       // Candidates first, then every lease — a transfer the matcher could not
       // place still has to be placeable without leaving the screen.
       const suggested = new Set((r.candidates || []).map((c) => c.bookingId));
       return (
-        <select className="adm-select" style={{ width: '100%', maxWidth: 290 }} value={assign[r.docNo] || ''}
+        <div>
+        <select className="adm-select" style={{ width: '100%', maxWidth: 290 }} value={typeof assign[r.docNo] === 'string' ? assign[r.docNo] : ''}
           onChange={(e) => setAssign((a) => ({ ...a, [r.docNo]: e.target.value }))}>
           <option value="">— tanlanmagan —</option>
+          {/* The booking id and the debt are what tell one option from another.
+              A tenant with five identical virtual-office leases renders five
+              identical lines without them, which is not a choice, it is a
+              lottery — and that is exactly what prod showed. */}
           {!!r.candidates?.length && (
             <optgroup label="Taklif">
               {r.candidates.map((c) => (
                 <option key={c.bookingId} value={c.bookingId}>
-                  {c.customer}{c.company ? ` · ${c.company}` : ''} · {c.building} {c.unit}
+                  {c.building} {c.unit} · {c.bookingId}
+                  {c.outstanding > 0 ? ` · qarz ${window.fmtSom(c.outstanding)}` : " · qarz yo'q"}
+                  {c.overdueSince ? ` (${fmtDate(c.overdueSince)} dan)` : ''}
                 </option>
               ))}
             </optgroup>
@@ -6707,6 +6831,17 @@ function BankStatementPanel() {
             ))}
           </optgroup>
         </select>
+        {/* Offered whenever the tenant has more than one lease in play — which
+            is exactly when one transfer tends to be paying for several. */}
+        {(r.candidates || []).length > 1 && (
+          <button onClick={() => setSplitting(r)} style={{
+            border: 0, background: 'transparent', padding: 0, marginTop: 4, cursor: 'pointer',
+            font: `600 11.5px ${window.GO.font}`, color: 'var(--g-brand-ink)',
+          }}>
+            Bir nechta ijaraga bo'lish{r.allocation?.length > 1 ? ` (${r.allocation.length} ta taklif)` : ''}
+          </button>
+        )}
+        </div>
       );
     } },
     { key: 'state', label: 'Holat', w: 150, render: (r) => {
@@ -6823,6 +6958,29 @@ function BankStatementPanel() {
           <DataTable columns={columns} rows={rows} rowKey={(r) => r.docNo} empty="Bu bo'limda satr yo'q" />
         </>
       )}
+
+      <GoModal open={!!splitting} onClose={() => setSplitting(null)} width={620}
+        title={splitting ? `To'lovni bo'lish · ${window.fmtSom(splitting.amount)} so'm` : ''}>
+        {splitting && (
+          <SplitEditor
+            row={splitting}
+            // Their own leases first; the full list behind it, since a transfer
+            // occasionally pays for a lease the matcher never considered.
+            leases={[
+              ...(splitting.candidates || []),
+              ...allBookings
+                .filter((b) => !(splitting.candidates || []).some((c) => c.bookingId === b.id))
+                .map((b) => ({ bookingId: b.id, building: b.label, unit: '', outstanding: 0, overdueSince: null })),
+            ]}
+            value={Array.isArray(assign[splitting.docNo]) ? assign[splitting.docNo] : null}
+            onCancel={() => setSplitting(null)}
+            onSave={(parts) => {
+              setAssign((a) => ({ ...a, [splitting.docNo]: parts }));
+              setSplitting(null);
+            }}
+          />
+        )}
+      </GoModal>
     </div>
   );
 }
