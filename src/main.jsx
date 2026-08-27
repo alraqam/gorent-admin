@@ -6557,6 +6557,9 @@ const SKIP_LABEL = {
 // thing that lets an operator disagree with it quickly.
 const WHY_LABEL = {
   contract: (d) => `shartnoma ${d}`,
+  // The bank sends this only for payers who bank with it, so it is rare — but
+  // when it comes it settles the identity outright, rename or no rename.
+  tax_id: (d) => `STIR ${d}`,
   account: () => 'hisob raqami',
   name: () => 'nomi',
   name_partial: () => 'nomi (qisman)',
