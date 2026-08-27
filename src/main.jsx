@@ -7550,7 +7550,9 @@ function BookingMoneySections({ b }) {
   React.useEffect(() => {
     if (!canContract) { setContract(null); return; }
     setContract(undefined);
-    api.get(`/contracts?search=${encodeURIComponent(b.id)}`)
+    // Ask by bookingId — the free-text `search` never matched booking ids, so
+    // the panel used to offer "Shartnoma tuzish" on leases that already had one.
+    api.get(`/contracts?booking=${encodeURIComponent(b.id)}`)
       .then((list) => setContract((list || []).find((c) => c.bookingId === b.id) || null))
       .catch(() => setContract(null));
   }, [b.id, canContract]);
