@@ -6578,6 +6578,179 @@ const WHY_LABEL = {
 const CONF_HUE = { high: 155, medium: 85, low: 55 };
 const CONF_LABEL = { high: 'aniq', medium: 'ehtimol', low: 'tekshiring' };
 
+// ── Import history ────────────────────────────────────────────────────
+// What was imported, by whom, and what happened to every row of it. The
+// payments alone cannot answer the second half of that: a row skipped because
+// its split did not add up leaves no trace anywhere else.
+
+const IMPORT_STATUS = {
+  ok: { hue: 155, label: 'kiritildi' },
+  partial: { hue: 55, label: "qisman" },
+  empty: { hue: 250, label: 'yozilmadi' },
+};
+
+// Why a row did not go in, in the operator's language rather than the wire's.
+const SKIP_REASON = {
+  already_imported: 'avval kiritilgan',
+  unknown_booking: "ijara topilmadi yoki sizga tegishli emas",
+  duplicate_booking: 'bitta ijara ikki marta',
+  not_in_file: 'faylda yo\'q',
+  not_incoming: 'kirim emas',
+  bad_amount: "summa noto'g'ri",
+};
+
+function skipReasonLabel(reason) {
+  if (!reason) return '—';
+  if (reason.startsWith('sum_mismatch:')) {
+    return `taqsimlangan summa mos emas (${window.fmtSom(Number(reason.split(':')[1]) || 0)})`;
+  }
+  return SKIP_REASON[reason] || reason;
+}
+
+function ImportHistoryPanel({ onOpen, version }) {
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [page, setPage] = React.useState(1);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.get(`/bank/statement/imports?page=${page}&pageSize=10`);
+        if (alive) { setData(r); setErr(null); }
+      } catch (e) { if (alive) setErr(e?.message || "Tarixni yuklab bo'lmadi"); }
+    })();
+    return () => { alive = false; };
+  }, [page, version]);
+
+  if (err) return <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>;
+  if (!data) return <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>;
+
+  const columns = [
+    { key: 'when', label: 'Sana', w: 150, render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{fmtDate(r.createdAt)}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{r.userEmail}</div>
+      </div>
+    ) },
+    { key: 'file', label: 'Fayl', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>{r.fileName}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+          {r.periodFrom ? `${fmtDate(r.periodFrom)} – ${fmtDate(r.periodTo)} · ` : ''}{r.rows} ta amaliyot
+        </div>
+      </div>
+    ) },
+    { key: 'created', label: 'Kiritilgan', align: 'right', w: 150, render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.fmtSom(r.createdSum)}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.created} ta to'lov</div>
+      </div>
+    ) },
+    { key: 'skipped', label: "O'tkazilgan", align: 'right', w: 110, render: (r) => (
+      r.skipped
+        ? <span style={{ font: `600 13px ${window.GO.font}`, color: 'oklch(0.48 0.14 55)' }}>{r.skipped} ta</span>
+        : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
+    ) },
+    { key: 'status', label: 'Holat', w: 120, render: (r) => {
+      const m = IMPORT_STATUS[r.status] || IMPORT_STATUS.empty;
+      return <Chip hue={m.hue}>{m.label}</Chip>;
+    } },
+  ];
+
+  return (
+    <div>
+      <DataTable columns={columns} rows={data.rows} rowKey={(r) => r.id} onRow={(r) => onOpen(r.id)}
+        empty="Hali import qilinmagan" />
+      {data.pages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          <Btn kind="ghost" sm disabled={data.page <= 1} onClick={() => setPage(data.page - 1)}>← Oldingi</Btn>
+          <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{data.page} / {data.pages}</span>
+          <Btn kind="ghost" sm disabled={data.page >= data.pages} onClick={() => setPage(data.page + 1)}>Keyingi →</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// One run, row by row. Reads the SNAPSHOT taken at import time, not a live
+// join — what a booking is called today must not rewrite what was done then.
+function ImportDetail({ id }) {
+  const [run, setRun] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await api.get(`/bank/statement/imports/${id}`);
+        if (alive) { setRun(r); setErr(null); }
+      } catch (e) { if (alive) setErr(e?.message || "Ma'lumot yo'q"); }
+    })();
+    return () => { alive = false; };
+  }, [id]);
+
+  if (err) return <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>;
+  if (!run) return <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>;
+
+  const lines = Array.isArray(run.lines) ? run.lines : [];
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 16, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+        <span>{fmtDate(run.createdAt)}</span>
+        <span>{run.userEmail}</span>
+        {run.account && <span style={{ fontFamily: 'ui-monospace, monospace' }}>{run.account}</span>}
+        <span style={{ color: 'var(--g-ink)', fontWeight: 600 }}>{run.created} ta · {window.fmtSom(run.createdSum)} so'm</span>
+        {!!run.skipped && <span style={{ color: 'oklch(0.48 0.14 55)', fontWeight: 600 }}>{run.skipped} ta o'tkazilgan</span>}
+      </div>
+
+      <div style={{ maxHeight: 420, overflowY: 'auto' }} className="adm-scroll">
+        {lines.map((l) => (
+          <div key={l.docNo} style={{
+            padding: '10px 12px', marginBottom: 8, borderRadius: 10, border: '1px solid var(--g-line)',
+            background: l.outcome === 'created' ? 'transparent' : 'var(--g-bg)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{l.payer || '—'}</div>
+                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2, fontFamily: 'ui-monospace, monospace' }}>
+                  {l.date ? fmtDate(l.date) + ' · ' : ''}{l.docNo}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                <div style={{ font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{l.amount ? window.fmtSom(l.amount) : '—'}</div>
+                <div style={{ marginTop: 3 }}>
+                  {l.outcome === 'created'
+                    ? <Chip hue={155}>kiritildi</Chip>
+                    : <Chip hue={55}>o'tkazildi</Chip>}
+                </div>
+              </div>
+            </div>
+            {l.outcome === 'created' ? (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--g-line)' }}>
+                {(l.parts || []).map((part) => (
+                  <div key={part.paymentId} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 2 }}>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {part.customer}{part.company ? ` · ${part.company}` : ''}{part.place ? ` · ${part.place}` : ''}
+                    </span>
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                      {window.fmtSom(part.amount)} <span style={{ color: 'var(--g-ink-4)', fontFamily: 'ui-monospace, monospace' }}>{part.paymentId}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ marginTop: 6, font: `500 12px ${window.GO.font}`, color: 'oklch(0.48 0.14 55)' }}>
+                Sabab: {skipReasonLabel(l.reason)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // One transfer, divided across the leases it pays for.
 //
 // A company settles several of its contracts with a single payment — that is
@@ -6675,6 +6848,9 @@ function BankStatementPanel() {
   const [err, setErr] = React.useState(null);
   const [done, setDone] = React.useState(null);
   const [splitting, setSplitting] = React.useState(null); // row → split editor
+  const [openRun, setOpenRun] = React.useState(null);      // import id → detail
+  // Bumped after an import so the history reloads without a full bootstrap.
+  const [historyVersion, setHistoryVersion] = React.useState(0);
   const inputRef = React.useRef(null);
 
   // Every lease that could receive money, for the override dropdown. The
@@ -6725,6 +6901,7 @@ function BankStatementPanel() {
       for (const r of importable) picked[r.docNo] = assigned(r);
       const res = await api.upload('/bank/statement/import', file, { assign: picked });
       setDone(res);
+      setHistoryVersion((v) => v + 1);
       // The debtors list on screen is now wrong — this money came off it.
       if (window.__gorentRefresh) await window.__gorentRefresh();
       // Re-read the same file, so what is on screen is what is in the database:
@@ -6958,6 +7135,21 @@ function BankStatementPanel() {
           <DataTable columns={columns} rows={rows} rowKey={(r) => r.docNo} empty="Bu bo'limda satr yo'q" />
         </>
       )}
+
+      {/* With no file open the screen is a history: the natural thing to want
+          on arriving here is "what did we already do?". */}
+      {!data && !busy && (
+        <>
+          <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)', margin: '22px 0 12px' }}>
+            Import tarixi
+          </div>
+          <ImportHistoryPanel onOpen={setOpenRun} version={historyVersion} />
+        </>
+      )}
+
+      <GoModal open={!!openRun} onClose={() => setOpenRun(null)} width={680} title="Import tafsilotlari">
+        {openRun && <ImportDetail id={openRun} />}
+      </GoModal>
 
       <GoModal open={!!splitting} onClose={() => setSplitting(null)} width={620}
         title={splitting ? `To'lovni bo'lish · ${window.fmtSom(splitting.amount)} so'm` : ''}>
