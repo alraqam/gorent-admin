@@ -5164,7 +5164,9 @@ function InvoicesScreen({ search }) {
           {!!(preview.blocked || []).length && (
             <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, background: 'oklch(0.97 0.03 70)', border: '1px solid oklch(0.88 0.07 70)' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `700 13px ${window.GO.font}`, color: 'oklch(0.45 0.13 70)', marginBottom: 6 }}>
-                <IconWarn size={15} /> Shartnomasi yo'q — {preview.blocked.length} ta bandlov hisob-fakturasiz qoladi
+                {/* The heading no longer names one cause: an unsigned draft
+                    blocks the run too, and each row states its own reason. */}
+                <IconWarn size={15} /> {preview.blocked.length} ta bandlov hisob-fakturasiz qoladi
               </div>
               {preview.blocked.map((b) => (
                 <div key={b.bookingId} style={{ font: `400 12.5px ${window.GO.font}`, color: 'oklch(0.42 0.1 70)', marginTop: 2 }}>
@@ -5173,7 +5175,7 @@ function InvoicesScreen({ search }) {
                 </div>
               ))}
               <div style={{ marginTop: 7, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-                Shartnoma tuzilgach, «Oylik hisob-fakturalarni yaratish» qayta ishga tushiriladi.
+                Shartnoma tuzilib imzolangach, «Oylik hisob-fakturalarni yaratish» qayta ishga tushiriladi.
               </div>
             </div>
           )}
@@ -5875,6 +5877,7 @@ function MiniStat({ label, value, unit, tone }) {
 // the operator-facing wording for it.
 const BLOCK_REASONS = {
   no_contract: 'Shartnoma tuzilmagan',
+  contract_draft: 'Shartnoma imzolanmagan',
   contract_terminated: 'Shartnoma bekor qilingan',
   contract_expired: 'Shartnoma muddati tugagan',
   no_company: 'Kompaniya biriktirilmagan',
