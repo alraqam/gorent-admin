@@ -1015,11 +1015,6 @@ const BOOKING_STATUS = {
   completed: { label: "Yakunlangan",   hue: 250, tone: "muted" },
   cancelled: { label: "Bekor qilingan",hue: 25,  tone: "bad" },
 };
-const PAYOUT_STATUS = {
-  paid:    { label: "To'langan",   hue: 155, tone: "good" },
-  pending: { label: "Kutilmoqda",  hue: 70,  tone: "warn" },
-  hold:    { label: "Ushlab turilgan", hue: 25, tone: "bad" },
-};
 // Money-loop dictionaries: contracts, payments, charges, payout statements.
 const CONTRACT_STATUS = {
   active:     { label: "Faol",            hue: 155, tone: "good" },
@@ -1189,7 +1184,6 @@ const UNITS = [];
 const HOSTS = [];
 const BOOKINGS = [];
 const REVIEWS = [];
-const PAYOUTS = [];
 const NOTIFS = [];
 const revenueSeries = MONTHS_UZ.map((m) => ({ label: m, value: 0 }));
 const bookingsSeries = MONTHS_UZ.map((m) => ({ label: m, value: 0 }));
@@ -1223,9 +1217,9 @@ function taxLabel(c) {
 Object.assign(window, { NOTIFS, taxLabel });
 
 Object.assign(window, {
-  AT, PRODUCT_STATUS, BOOKING_STATUS, PAYOUT_STATUS, CAT_META,
+  AT, PRODUCT_STATUS, BOOKING_STATUS, CAT_META,
   CONTRACT_STATUS, PAYMENT_METHODS, CHARGE_TYPES, STATEMENT_STATUS,
-  catName, catShort, BUILDINGS, PRODUCTS, UNITS, HOSTS, BOOKINGS, REVIEWS, PAYOUTS,
+  catName, catShort, BUILDINGS, PRODUCTS, UNITS, HOSTS, BOOKINGS, REVIEWS,
   MONTHS_UZ, revenueSeries, bookingsSeries, byCategory,
   KPIS, totalRevenue, totalBookings, activeBookings, avgOccupancy, pendingApproval, avgRating,
   fmtCompactSom, fmtSomFull,
@@ -3797,7 +3791,7 @@ function BookingsScreen({ search, role, route, setRoute }) {
 
 // ═══ HOSTS ══════════════════════════════════════════════════
 function HostDetailDrawer({ h, onClose, onEdit }) {
-  // Full detail (buildings + payout) comes from /hosts/:id.
+  // Full detail (buildings + newest payout statement) comes from /hosts/:id.
   const [full, setFull] = React.useState(null);
   React.useEffect(() => {
     setFull(null);
@@ -3805,7 +3799,7 @@ function HostDetailDrawer({ h, onClose, onEdit }) {
   }, [h && h.id]);
   if (!h) return <Drawer open={false} onClose={onClose} width={560}><div /></Drawer>;
   const buildings = (full && full.buildings) || [];
-  const payout = full && full.payout;
+  const statement = full && full.statement;
   return (
     <Drawer open={!!h} onClose={onClose} width={560}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0 }}>
@@ -3853,7 +3847,7 @@ function HostDetailDrawer({ h, onClose, onEdit }) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 12, borderTop: '1px solid var(--g-line)' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}><IconCard size={15} /> {h.payout}</span>
-            {payout && <StatusPill s={payout.status} dict={window.PAYOUT_STATUS} size="sm" />}
+            {statement && <StatusPill s={statement.status} dict={window.STATEMENT_STATUS} size="sm" />}
           </div>
         </div>
 
@@ -4566,61 +4560,72 @@ function BuildingForm({ building, role, onClose, onCreated }) {
   );
 }
 
-// ═══ REVENUE & PAYOUTS ══════════════════════════════════════
+// ═══ REVENUE ════════════════════════════════════════════════
+//
+// Every figure here comes from /revenue/summary, which reads PayoutStatement
+// — the statements that are actually generated, approved and paid.
+//
+// It used to read the `Payout` table, which only ever held demo-seed rows, and
+// printed the platform's commission as a flat 12% of booked turnover. That
+// constant was disconnected from settings.commission, so the number an
+// operator read here was one no statement or invoice would ever add up to.
+// The table is gone; the screen no longer has a fictional half.
 function RevenueScreen({ search, role }) {
-  const platformFee = Math.round(window.totalRevenue * 0.12);
-  const columns = [
-    { key: 'id', label: 'To\u2019lov ID', render: (p) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{p.id}</span> },
-    { key: 'host', label: 'Mezbon', render: (p) => <PersonCell name={p.host.name} sub={p.host.org} hue={p.host.hue} /> },
-    { key: 'method', label: 'Usul', render: (p) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}><IconCard size={15} /> {p.host.payout}</span> },
-    { key: 'fee', label: 'Komissiya', align: 'right', render: (p) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{window.fmtCompactSom(p.fee)}</span> },
-    { key: 'amount', label: 'To\u2019lov summasi', align: 'right', render: (p) => <MoneyCell n={p.amount} /> },
-    { key: 'date', label: 'Sana', render: (p) => <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{p.date}</span> },
-    { key: 'status', label: window.AT.status, render: (p) => <StatusPill s={p.status} dict={window.PAYOUT_STATUS} /> },
-  ];
-  let rows = window.PAYOUTS;
-  if (search) rows = rows.filter((p) => (p.id + p.host.name).toLowerCase().includes(search.toLowerCase()));
+  const [sum, setSum] = React.useState(null);
+  React.useEffect(() => {
+    api.get('/revenue/summary').then(setSum).catch(() => setSum(null));
+  }, []);
+
+  const som = (n) => window.fmtCompactSom(n || 0);
+  const counts = (sum && sum.byStatus) || { draft: 0, approved: 0, paid: 0 };
+  const total = counts.draft + counts.approved + counts.paid;
 
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
-        <StatCard icon={<IconWallet size={17} />} label="Yalpi aylanma" value={window.fmtCompactSom(window.totalRevenue)} unit="so'm" spark={window.revenueSeries.map((d) => d.value)} />
-        <StatCard icon={<IconChart size={17} />} label="Platforma komissiyasi" value={window.fmtCompactSom(platformFee)} unit="so'm" spark={window.revenueSeries.map((d) => d.value * 0.12)} />
-        <StatCard icon={<IconCheck2 size={17} />} label="To'langan" value={window.fmtCompactSom(window.PAYOUTS.filter((p) => p.status === 'paid').reduce((s, p) => s + p.amount, 0))} unit="so'm" />
-        <StatCard icon={<IconClock size={17} />} label="Kutilayotgan" value={window.fmtCompactSom(window.PAYOUTS.filter((p) => p.status !== 'paid').reduce((s, p) => s + p.amount, 0))} unit="so'm" delta={-3} deltaInvert />
+        <StatCard icon={<IconWallet size={17} />} label="Yalpi aylanma" value={som(sum && sum.grossTurnover)} unit="so'm" spark={window.revenueSeries.map((d) => d.value)} />
+        <StatCard icon={<IconChart size={17} />} label="Platforma komissiyasi" value={som(sum && sum.platformFee)} unit="so'm" />
+        <StatCard icon={<IconCheck2 size={17} />} label="To'langan" value={som(sum && sum.paid)} unit="so'm" />
+        <StatCard icon={<IconClock size={17} />} label="Kutilayotgan" value={som(sum && sum.pending)} unit="so'm" />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1fr', gap: 16, marginBottom: 18 }}>
         <Card>
-          <SectionHead title="Oylik aylanma" sub="Daromad va platforma komissiyasi · so'm" />
+          <SectionHead title="Oylik aylanma" sub="Daromad · so'm" />
           <BarChart data={window.revenueSeries} h={200} unit=" so'm" fmt={(v) => window.fmtSom(v)} />
         </Card>
         <Card>
-          <SectionHead title="To'lov holati" />
+          <SectionHead title="Hisobot holati" sub="Mezbonlar bo'yicha oylik hisobotlar" />
           <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-            <Donut size={132} thickness={20} centerLabel={window.PAYOUTS.length + ''} centerSub="to'lov" segments={[
-              { value: window.PAYOUTS.filter((p) => p.status === 'paid').length, color: 'oklch(0.6 0.13 155)' },
-              { value: window.PAYOUTS.filter((p) => p.status === 'pending').length, color: 'oklch(0.78 0.13 75)' },
-              { value: window.PAYOUTS.filter((p) => p.status === 'hold').length, color: 'oklch(0.62 0.16 25)' },
+            <Donut size={132} thickness={20} centerLabel={total + ''} centerSub="hisobot" segments={[
+              { value: counts.paid, color: 'oklch(0.6 0.13 155)' },
+              { value: counts.approved, color: 'oklch(0.78 0.13 75)' },
+              { value: counts.draft, color: 'oklch(0.7 0.02 250)' },
             ]} />
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {Object.entries(window.PAYOUT_STATUS).map(([k, v]) => (
+              {Object.entries(window.STATEMENT_STATUS).map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                   <span style={{ width: 9, height: 9, borderRadius: 3, background: `oklch(0.62 0.14 ${v.hue})` }} />
                   <span style={{ flex: 1, font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{v.label}</span>
-                  <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{window.PAYOUTS.filter((p) => p.status === k).length}</span>
+                  <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>{counts[k] || 0}</span>
                 </div>
               ))}
             </div>
           </div>
+          {/* The brokers' cut comes out of the OWNER's share, not the
+              platform's, so it is reported beside the commission rather than
+              folded into it — see StatementsService. */}
+          {!!(sum && sum.agentFee) && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--g-line)', display: 'flex', justifyContent: 'space-between', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
+              <span>Vakillar komissiyasi</span>
+              <span style={{ color: 'var(--g-ink)', fontWeight: 600 }}>{som(sum.agentFee)} so'm</span>
+            </div>
+          )}
         </Card>
       </div>
 
       {/* Monthly payout statements (hisobotlar) — generated per host per period */}
-      <PayoutStatementsPanel role={role} />
-
-      <SectionHead title="To'lovlar tarixi" right={<Btn kind="ghost" sm><IconDownload size={15} /> {window.AT.export}</Btn>} />
-      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} />
+      <PayoutStatementsPanel role={role} search={search} />
     </div>
   );
 }
@@ -8173,7 +8178,7 @@ function AgentStatementsPanel({ role, period }) {
   );
 }
 
-function PayoutStatementsPanel({ role }) {
+function PayoutStatementsPanel({ role, search }) {
   const [period, setPeriod] = React.useState(currentInvoicePeriod());
   const [rows, setRows] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -8202,7 +8207,11 @@ function PayoutStatementsPanel({ role }) {
     } catch (e) { window.alert(e.message); }
   };
 
-  const list = rows || [];
+  // The Topbar search filters this table now that the fictional payouts
+  // history it used to filter is gone.
+  const q = (search || '').trim().toLowerCase();
+  const list = (rows || []).filter((s) =>
+    !q || `${s.id} ${s.host?.name || ''} ${s.host?.org || ''}`.toLowerCase().includes(q));
   const columns = [
     { key: 'id', label: 'ID', render: (s) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{s.id}</span> },
     { key: 'host', label: 'Mezbon', render: (s) => <PersonCell name={s.host?.name || '—'} sub={s.host?.org} hue={s.host?.hue} /> },

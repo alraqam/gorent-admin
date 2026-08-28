@@ -208,15 +208,13 @@ async function bootstrap() {
   window.INTEGRATIONS = integrations;
   window.META = meta;
 
-  // Hosts directory, payouts, invoices and companies are platform-only —
+  // Hosts directory, invoices and companies are platform-only —
   // a 403 here must never break the host account's bootstrap.
   let hosts = [];
-  let payouts = [];
   let invoices = [];
   let companies = [];
   if (role === 'platform') {
     try { hosts = await get('/hosts'); } catch { hosts = []; }
-    try { payouts = await get('/payouts'); } catch { payouts = []; }
     try { invoices = await get('/invoices'); } catch { invoices = []; }
     try { companies = await get('/companies'); } catch { companies = []; }
   }
@@ -235,7 +233,6 @@ async function bootstrap() {
   window.HOSTS = hosts;
   window.BOOKINGS = bookings;
   window.REVIEWS = reviews;
-  window.PAYOUTS = payouts;
   window.INVOICES = invoices;
   window.COMPANIES = companies;
   window.NOTIFS = notifs;
