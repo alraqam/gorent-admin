@@ -136,6 +136,44 @@ async function downloadFile(path, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// ── Broker authority (a rendering hint, never the authority) ─────────
+//
+// What the logged-in broker may do, and for which owner. Loaded once by
+// bootstrap() from `/agents/me/hosts`, which reports the mandates the server
+// resolved for that very request.
+//
+// This decides only what to DRAW. The authority is AgentGuard + canActFor on
+// the server, which re-reads live mandates on every single call precisely so a
+// revocation bites immediately — a copy cached in a browser tab is exactly the
+// thing that reasoning refuses to trust, and nothing here asks it to be
+// trusted. Which is also why a failed load fails OPEN: a broker shown a button
+// they may not use gets a clear refusal from the server, where a broker whose
+// screen went read-only because of one flaky request has no idea what happened.
+let mandate = null; // { union, byHost } for an agent · null for everyone else
+
+async function loadMandate() {
+  mandate = null;
+  if (currentUser()?.role !== 'agent') return;
+  try {
+    const r = await get('/agents/me/hosts');
+    mandate = {
+      union: new Set(r.capabilities || []),
+      byHost: new Map((r.hosts || []).map((h) => [h.hostId, new Set(h.capabilities || [])])),
+    };
+  } catch { mandate = null; /* fail open — see above */ }
+}
+
+// May the current user do `cap`? Pass `hostId` to ask about one owner's
+// property; without it the answer is the union across every live mandate,
+// which is the most an honest answer can be when the caller has no owner in
+// hand. Always true for platform and host accounts — mandates do not narrow
+// them, and their own access is settled by role and host scope as before.
+function can(cap, hostId) {
+  if (!mandate) return true;
+  if (hostId) return !!mandate.byHost.get(hostId)?.has(cap);
+  return mandate.union.has(cap);
+}
+
 async function login(email, password) {
   const res = await post('/auth/login', { email, password });
   setToken(res.accessToken);
@@ -151,6 +189,8 @@ function logout() {
 // Load all datasets the dashboard renders, then publish onto window globals.
 async function bootstrap() {
   const role = currentUser()?.role;
+  // Before anything renders — the UI asks `can()` while drawing its first frame.
+  await loadMandate();
   const [overview, meta, buildings, products, units, bookings, reviews, notifs, settings, integrations] = await Promise.all([
     get('/overview'),
     get('/meta').catch(() => null),
@@ -221,5 +261,6 @@ export const api = {
   getToken, setToken, clearToken, currentUser, isAuthed,
   get, post, put, patch, del, upload, fileBlobUrl, downloadFile,
   login, logout, bootstrap,
+  can,
   ApiError,
 };

@@ -1586,12 +1586,30 @@ const NAV = [
   { id: 'bookings',  label: () => window.AT.navBookings,  icon: IconCal },
   { id: 'contracts', label: () => "Shartnomalar",          icon: IconDoc },
   { id: 'debtors',   label: () => "Qarzdorlik",            icon: IconWarn },
-  { id: 'hosts',     label: () => window.AT.navHosts,     icon: IconUsers },
-  { id: 'companies', label: () => "Kompaniyalar",         icon: IconBuilding },
+  // Both endpoints are @Roles('platform') — bootstrap() already skips fetching
+  // them for anyone else, so a host or a broker clicking these landed on an
+  // empty screen with no explanation. Don't offer the door.
+  { id: 'hosts',     label: () => window.AT.navHosts,     icon: IconUsers, platformOnly: true },
+  { id: 'companies', label: () => "Kompaniyalar",         icon: IconBuilding, platformOnly: true },
   { id: 'revenue',   label: () => window.AT.navRevenue,   icon: IconWallet },
   { id: 'invoices',  label: () => "Hisob-fakturalar",     icon: IconDoc },
   { id: 'reviews',   label: () => window.AT.navReviews,   icon: IconStar },
 ];
+
+// The menu this account can actually reach.
+//
+// Off the AUTHENTICATED role, never the `role` prop threaded through these
+// components — that one is the "Boshlang'ich rol" tweak, a prototype view-as
+// switch that defaults to 'platform' and would hand a broker the whole menu.
+//
+// Capabilities deliberately play no part here: a mandate ALWAYS grants read,
+// so hiding a section from a broker who merely cannot write in it would hide
+// the very book they were engaged to watch. Capabilities gate the buttons
+// inside, not the door.
+const navFor = () => {
+  const platform = (api.currentUser() || {}).role === 'platform';
+  return NAV.filter((n) => !n.platformOnly || platform);
+};
 
 function Sidebar({ route, setRoute, role, counts }) {
   const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
@@ -1615,7 +1633,7 @@ function Sidebar({ route, setRoute, role, counts }) {
       <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: '6px 12px' }}>
         <div style={{ font: `600 10px ui-monospace, monospace`, letterSpacing: '0.14em', color: 'rgba(255,255,255,0.4)',
           padding: '10px 10px 8px', textTransform: 'uppercase' }}>Menyu</div>
-        {NAV.map((n) => {
+        {navFor().map((n) => {
           const active = route.section === n.id;
           const b = badge[n.id];
           return (
@@ -1824,7 +1842,7 @@ function MoneyCell({ n, compact = true, sub }) {
   );
 }
 
-Object.assign(window, { NAV, Sidebar, Topbar, DataTable, ProductCell, PersonCell, MoneyCell });
+Object.assign(window, { NAV, navFor, Sidebar, Topbar, DataTable, ProductCell, PersonCell, MoneyCell });
 
 // ============================================================
 // src/admin-overview.jsx
@@ -4057,8 +4075,8 @@ function BuildingsScreen({ search, role }) {
             <IconBtn title={window.AT.reject} onClick={() => gorentMutate(() => api.post(`/buildings/${b.id}/reject`))} style={{ color: 'oklch(0.55 0.16 25)' }}><IconX2 size={16} /></IconBtn>
           </>
         )}
-        <IconBtn title={window.AT.edit} onClick={() => setEditing(b)}><IconEdit size={16} /></IconBtn>
-        <IconBtn title={window.AT.delete} style={{ color: 'oklch(0.55 0.16 25)' }} onClick={() => window.confirm(`"${b.name}" binosini o'chirasizmi?`) && gorentMutate(() => api.del(`/buildings/${b.id}`))}><IconTrash size={16} /></IconBtn>
+        {api.can('listings', b.hostId) && <IconBtn title={window.AT.edit} onClick={() => setEditing(b)}><IconEdit size={16} /></IconBtn>}
+        {api.can('listings', b.hostId) && <IconBtn title={window.AT.delete} style={{ color: 'oklch(0.55 0.16 25)' }} onClick={() => window.confirm(`"${b.name}" binosini o'chirasizmi?`) && gorentMutate(() => api.del(`/buildings/${b.id}`))}><IconTrash size={16} /></IconBtn>}
       </div>
     ) },
   ];
@@ -4067,7 +4085,7 @@ function BuildingsScreen({ search, role }) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
         <StatusChips dict={window.PRODUCT_STATUS} value={status} setValue={setStatus} counts={counts} />
-        <Btn kind="primary" sm onClick={() => setEditing({})}><IconPlus size={15} /> Bino qo'shish</Btn>
+        {api.can('listings') && <Btn kind="primary" sm onClick={() => setEditing({})}><IconPlus size={15} /> Bino qo'shish</Btn>}
       </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(b) => setEditing(b)} empty="Hozircha binolar yo'q" />
     </div>
@@ -6136,7 +6154,7 @@ function DebtNoteItem({ n, onChanged }) {
 // ─── Timeline for one lease (or the whole tenant) ───────────
 // Tenant scope is how a renewal keeps its history: a renewed lease is a new
 // booking but the same Company.
-function DebtNotesPanel({ bookingId, companyId, onChanged }) {
+function DebtNotesPanel({ bookingId, companyId, onChanged, hostId }) {
   const [notes, setNotes] = React.useState(null);
   const [scope, setScope] = React.useState('booking');
   const [adding, setAdding] = React.useState(false);
@@ -6166,7 +6184,7 @@ function DebtNotesPanel({ bookingId, companyId, onChanged }) {
               options={[{ value: 'booking', label: 'Shu ijara' }, { value: 'tenant', label: 'Ijarachi bo\'yicha' }]}
             />
           )}
-          {!adding && <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Izoh qo'shish</Btn>}
+          {!adding && api.can('collect', hostId) && <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Izoh qo'shish</Btn>}
         </div>
       </div>
 
@@ -6226,6 +6244,9 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
             </Card>
 
             <Card pad={16}>
+              {/* No hostId on a debtors row (it carries the building's NAME,
+                  not its owner), so a broker is judged on the union of their
+                  mandates here — see api.can(). */}
               <DebtNotesPanel
                 bookingId={row.bookingId}
                 companyId={row.company?.id || null}
@@ -7539,6 +7560,11 @@ function BookingMoneySections({ b }) {
   const [showCharge, setShowCharge] = React.useState(false);
   const [contractBusy, setContractBusy] = React.useState(false);
 
+  // What a broker may do on THIS owner's property. Everyone else gets true.
+  const hostId = b.unit?.offering?.building?.hostId;
+  const mayCollect = api.can('collect', hostId);
+  const mayDocument = api.can('documents', hostId);
+
   const load = React.useCallback(() => {
     api.get(`/payments?booking=${encodeURIComponent(b.id)}`).then(setPayments).catch(() => setPayments([]));
     api.get(`/charges?booking=${encodeURIComponent(b.id)}`).then(setCharges).catch(() => setCharges([]));
@@ -7592,7 +7618,7 @@ function BookingMoneySections({ b }) {
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>To'lovlar{payments ? ` (${payments.length} ta)` : ''}</div>
-          <Btn kind="ghost" sm onClick={() => setShowPay((v) => !v)}><IconPlus size={13} /> To'lov</Btn>
+          {mayCollect && <Btn kind="ghost" sm onClick={() => setShowPay((v) => !v)}><IconPlus size={13} /> To'lov</Btn>}
         </div>
         {showPay && (
           <div style={{ padding: 12, borderRadius: 12, border: '1px solid var(--g-line)', background: 'var(--g-bg)', marginBottom: 10 }}>
@@ -7614,7 +7640,7 @@ function BookingMoneySections({ b }) {
                 </div>
               </div>
               <span style={{ font: `500 11px ui-monospace, monospace`, color: 'var(--g-ink-4)', flexShrink: 0 }}>{p.id}</span>
-              <IconBtn title="O'chirish (tuzatish)" onClick={() => delPayment(p)} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>
+              {mayCollect && <IconBtn title="O'chirish (tuzatish)" onClick={() => delPayment(p)} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>}
             </div>
           ))}
         </div>
@@ -7624,7 +7650,7 @@ function BookingMoneySections({ b }) {
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Qo'shimcha xarajatlar{charges ? ` (${charges.length} ta)` : ''}</div>
-          <Btn kind="ghost" sm onClick={() => setShowCharge((v) => !v)}><IconPlus size={13} /> Xarajat</Btn>
+          {mayCollect && <Btn kind="ghost" sm onClick={() => setShowCharge((v) => !v)}><IconPlus size={13} /> Xarajat</Btn>}
         </div>
         {showCharge && <ChargeForm bookingId={b.id} onCancel={() => setShowCharge(false)} onDone={() => { setShowCharge(false); refreshAll(); }} />}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -7644,10 +7670,10 @@ function BookingMoneySections({ b }) {
                 </div>
               </div>
               <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', flexShrink: 0, textDecoration: c.refundedAt ? 'line-through' : 'none' }}>{window.fmtSom(c.amount)} so'm</span>
-              {c.type === 'deposit' && !c.refundedAt && (
+              {mayCollect && c.type === 'deposit' && !c.refundedAt && (
                 <Btn kind="soft" sm onClick={() => refundCharge(c)}>Qaytarish</Btn>
               )}
-              <IconBtn title={window.AT.delete} onClick={() => delCharge(c)} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>
+              {mayCollect && <IconBtn title={window.AT.delete} onClick={() => delCharge(c)} style={{ width: 28, height: 28, color: 'oklch(0.55 0.16 25)' }}><IconTrash size={14} /></IconBtn>}
             </div>
           ))}
         </div>
@@ -7663,8 +7689,13 @@ function BookingMoneySections({ b }) {
               <span style={{ flex: 1, font: `600 13px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{contract.number}</span>
               <StatusPill s={contract.derivedStatus || contract.status} dict={window.CONTRACT_STATUS} size="sm" />
             </div>
-          ) : (
+          ) : mayDocument ? (
             <Btn kind="ghost" sm onClick={createContract} disabled={contractBusy}><IconDoc size={14} /> {contractBusy ? 'Yaratilmoqda…' : 'Shartnoma tuzish'}</Btn>
+          ) : (
+            // `documents` is off by default on a mandate — signing binds the
+            // OWNER to a fiscal document in their own name. Say that, rather
+            // than showing a button that answers with a refusal.
+            muted("Shartnoma tuzish vakolati berilmagan — mulkdorga murojaat qiling.")
           )}
         </div>
       )}
@@ -7672,7 +7703,7 @@ function BookingMoneySections({ b }) {
       {/* The same collection record the Qarzdorlik drawer shows — one panel in
           both places, so the two can never tell different stories. */}
       <div style={{ marginTop: 4 }}>
-        <DebtNotesPanel bookingId={b.id} companyId={b.companyRef?.id || null} onChanged={refreshAll} />
+        <DebtNotesPanel bookingId={b.id} companyId={b.companyRef?.id || null} hostId={hostId} onChanged={refreshAll} />
       </div>
     </>
   );
@@ -9154,6 +9185,11 @@ function AdminApp() {
   const sidebarBg = t.sidebar === 'light' ? 'var(--g-card)' : 'var(--g-brand-deep)';
 
   function renderSection() {
+    // Hiding the menu entry isn't enough — a bookmark, or a route left over
+    // from a platform session in the same tab, still points here.
+    if (!navFor().some((n) => n.id === route.section) && NAV.some((n) => n.id === route.section)) {
+      return <Overview variant={t.dashboardLayout} setLayout={(v) => setTweak('dashboardLayout', v)} setRoute={setRoute} />;
+    }
     if (formOpen !== undefined && formOpen !== null) {
       return <ProductForm product={formOpen.product} onClose={() => setFormOpen(null)} onSave={() => setFormOpen(null)} />;
     }
@@ -9189,7 +9225,10 @@ function AdminApp() {
     : route.section === 'products'
     ? (role === 'platform' ? <Btn kind="primary" sm onClick={() => setFormOpen({ product: null })}><IconPlus size={15} /> {window.AT.addProduct}</Btn> : null)
     : route.section === 'bookings'
-    ? <Btn kind="primary" sm onClick={() => setRoute({ section: 'bookings', sub: 'add' })}><IconPlus size={15} /> Bandlov qo'shish</Btn>
+    // Nothing to narrow by yet — a lease that doesn't exist has no owner. The
+    // union is the honest question here, and the form's own host picker
+    // settles which owner it lands on.
+    ? (api.can('bookings') ? <Btn kind="primary" sm onClick={() => setRoute({ section: 'bookings', sub: 'add' })}><IconPlus size={15} /> Bandlov qo'shish</Btn> : null)
     : route.section === 'hosts'
     ? <Btn kind="primary" sm onClick={() => setRoute({ section: 'hosts', sub: 'add' })}><IconPlus size={15} /> Mezbon qo'shish</Btn>
     : null;
@@ -9279,7 +9318,7 @@ function SidebarLightInner({ route, setRoute, role, counts }) {
       </div>
       <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: '6px 12px' }}>
         <div style={{ font: `600 10px ui-monospace, monospace`, letterSpacing: '0.14em', color: 'var(--g-ink-4)', padding: '10px 10px 8px', textTransform: 'uppercase' }}>Menyu</div>
-        {window.NAV.map((n) => {
+        {window.navFor().map((n) => {
           const active = route.section === n.id; const b = badge[n.id];
           return (
             <button key={n.id} onClick={() => setRoute({ section: n.id })} style={{
