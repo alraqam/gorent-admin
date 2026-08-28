@@ -967,9 +967,6 @@ const AT = {
   navRevenue: "Daromad",
   navReviews: "Sharhlar",
   navSettings: "Sozlamalar",
-  // roles
-  rolePlatform: "Platforma admini",
-  roleHost: "Mezbon ko'rinishi",
   // generic
   search: "Qidirish…",
   all: "Barchasi",
@@ -1664,13 +1661,13 @@ function Sidebar({ route, setRoute, role, counts }) {
           <span style={{ display: 'flex', color: route.section === 'settings' ? 'var(--g-brand)' : 'rgba(255,255,255,0.55)' }}><IconSettings size={18} /></span> {window.AT.navSettings}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 10px 4px' }}>
-          <Avatar name="Admin Operator" size={34} hue={155} />
+          <Avatar name={signedInName()} size={34} hue={155} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ font: `600 12.5px ${window.GO.font}`, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {role === 'host' ? "Aziza Rashidova" : "Admin Operator"}
+              {signedInName()}
             </div>
             <div style={{ font: `400 11px ${window.GO.font}`, color: 'rgba(255,255,255,0.45)' }}>
-              {role === 'host' ? "AR Estate · mezbon" : "Platforma · super-admin"}
+              {signedInOrg()}
             </div>
           </div>
           <button title="Chiqish" onClick={() => window.__gorentLogout()} className="adm-iconbtn" style={{ color: 'rgba(255,255,255,0.4)', display: 'flex', background: 'transparent', border: 0, cursor: 'pointer', padding: 4 }}><IconLogout size={16} /></button>
@@ -1730,8 +1727,23 @@ function NotificationsBell({ onNavigate }) {
   );
 }
 
+// How each authenticated role is named in the chrome. 'agent' is a broker
+// acting under mandates from one or more owners.
+const ROLE_LABEL = { platform: 'Platforma', host: 'Mezbon', agent: 'Vakil' };
+
+// Who is actually signed in. Both sidebars used to print "Admin Operator" or
+// "Aziza Rashidova" off the view-as toggle — two seeded demo people, shown to
+// every real user of every deployment. The session has always carried the
+// real name; nothing read it.
+const signedInName = () => (api.currentUser() || {}).name || '—';
+const signedInOrg = () => {
+  const u = api.currentUser() || {};
+  const label = ROLE_LABEL[u.role] || u.role || '';
+  return u.org ? `${u.org} · ${label}` : label;
+};
+
 // ─── Topbar ─────────────────────────────────────────────────
-function Topbar({ title, sub, role, onRole, search, setSearch, actions, onNavigate }) {
+function Topbar({ title, sub, role, search, setSearch, actions, onNavigate }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
@@ -1744,17 +1756,18 @@ function Topbar({ title, sub, role, onRole, search, setSearch, actions, onNaviga
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <SearchInput value={search} onChange={setSearch} width={220} />
         {actions}
-        {/* Role switch */}
-        <div style={{ display: 'inline-flex', gap: 2, padding: 3, background: 'var(--g-bg-2)', borderRadius: 999 }}>
-          {[['platform', window.AT.rolePlatform], ['host', window.AT.roleHost]].map(([v, lbl]) => (
-            <button key={v} onClick={() => onRole(v)} title={lbl} style={{
-              padding: '6px 12px', borderRadius: 999, border: 0, cursor: 'pointer',
-              background: role === v ? 'var(--g-card)' : 'transparent', color: role === v ? 'var(--g-ink)' : 'var(--g-ink-3)',
-              font: `600 12px ${window.GO.font}`, boxShadow: role === v ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
-              display: 'flex', alignItems: 'center', gap: 6,
-            }}>{v === 'platform' ? <IconShield size={13} /> : <IconUser size={13} />}{v === 'platform' ? 'Platforma' : 'Mezbon'}</button>
-          ))}
-        </div>
+        {/* What the signed-in account actually is — a label, not a switch.
+            This used to be a Platforma/Mezbon toggle that changed which
+            buttons were drawn while the API went on enforcing the real role,
+            so the two could disagree. A UI that lies about who you are
+            produces support tickets indistinguishable from security
+            incidents; the role is now read, never chosen. */}
+        <span title={ROLE_LABEL[role] || role} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999,
+          background: 'var(--g-bg-2)', color: 'var(--g-ink-3)', font: `600 12px ${window.GO.font}`,
+        }}>
+          {role === 'platform' ? <IconShield size={13} /> : <IconUser size={13} />}{ROLE_LABEL[role] || role}
+        </span>
         <NotificationsBell onNavigate={onNavigate} />
       </div>
     </div>
@@ -9071,7 +9084,6 @@ const ADMIN_TWEAKS = /*EDITMODE-BEGIN*/{
   "dashboardLayout": "A",
   "primaryColor": "#7863fc",
   "density": "regular",
-  "defaultRole": "platform",
   "sidebar": "dark"
 }/*EDITMODE-END*/;
 
@@ -9149,11 +9161,22 @@ function AdminApp() {
     window.__gorentRefresh = async () => { await api.bootstrap(); setDataVersion((v) => v + 1); };
     return () => { delete window.__gorentRefresh; };
   }, []);
-  const [role, setRole] = React.useState(t.defaultRole || 'platform');
+  // THE role — the one the API will enforce — not a choice.
+  //
+  // This was `useState(t.defaultRole || 'platform')`, a view-as switch from
+  // the design-tool tweaks that defaulted to 'platform' regardless of who was
+  // signed in. Screens split into two camps over it: some gated on this prop,
+  // others on api.currentUser().role, and the two disagreed for every account
+  // that was not a platform admin. Nothing was exposed — the server has always
+  // decided — but a host saw platform-only buttons that answered with 403, and
+  // an operator cannot tell that apart from a bug or a breach.
+  //
+  // Falls back to 'host', the least-privileged of the three, so an unreadable
+  // session draws the smallest UI rather than the largest.
+  const role = (api.currentUser() || {}).role || 'host';
   const [search, setSearch] = React.useState('');
   const [formOpen, setFormOpen] = React.useState(null); // null | {product?}
 
-  React.useEffect(() => { setRole(t.defaultRole || 'platform'); }, [t.defaultRole]);
   React.useEffect(() => { setSearch(''); setFormOpen(null); }, [route.section]);
 
   // Apply brand CSS vars
@@ -9256,7 +9279,7 @@ function AdminApp() {
         <Topbar
           title={pageTitle}
           sub={pageSub}
-          role={role} onRole={setRole}
+          role={role}
           search={search} setSearch={setSearch}
           actions={topActions}
           onNavigate={(section) => setRoute({ section })}
@@ -9281,8 +9304,8 @@ function AdminApp() {
             onChange={(v) => setTweak('sidebar', v)} />
         </TweakSection>
         <TweakSection label="Ko'rinish">
-          <TweakRadio label="Boshlang'ich rol" value={t.defaultRole} options={['platform', 'host']}
-            onChange={(v) => setTweak('defaultRole', v)} />
+          {/* "Boshlang'ich rol" removed — the role is read from the session,
+              not picked here. See the note in AdminApp. */}
           <TweakRadio label="Zichlik" value={t.density} options={['compact', 'regular', 'comfy']}
             onChange={(v) => setTweak('density', v)} />
         </TweakSection>
@@ -9343,10 +9366,10 @@ function SidebarLightInner({ route, setRoute, role, counts }) {
           <span style={{ display: 'flex', color: route.section === 'settings' ? 'var(--g-brand)' : 'var(--g-ink-4)' }}><IconSettings size={18} /></span> {window.AT.navSettings}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px' }}>
-          <Avatar name={role === 'host' ? "Aziza Rashidova" : "Admin Operator"} size={34} hue={155} />
+          <Avatar name={signedInName()} size={34} hue={155} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{role === 'host' ? "Aziza Rashidova" : "Admin Operator"}</div>
-            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{role === 'host' ? "AR Estate · mezbon" : "Platforma · super-admin"}</div>
+            <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{signedInName()}</div>
+            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{signedInOrg()}</div>
           </div>
           <button title="Chiqish" onClick={() => window.__gorentLogout()} className="adm-iconbtn" style={{ color: 'var(--g-ink-4)', display: 'flex', background: 'transparent', border: 0, cursor: 'pointer', padding: 4 }}><IconLogout size={16} /></button>
         </div>
