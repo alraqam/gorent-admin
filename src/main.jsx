@@ -7713,8 +7713,26 @@ function BookingMoneySections({ b }) {
 }
 
 // ═══ SHARTNOMALAR (rental contracts) ════════════════════════
+// The AGREED monthly rate — the number on the contract, not one derived from
+// the term.
+//
+// This used to be `total / months`, and those two do not divide. `months`
+// counts whole ANNIVERSARY months (11 for 15.04.2026 → 01.04.2027) while
+// `total` also contains the 16-day opening stub, so the stub was spread over
+// too small a divisor and every lease that does not start on the 1st read
+// high: a 1 501 958 lease showed as 1 574 780.
+//
+// It is the same sum the API prints on the contract document
+// (bookingMonthlyRate in common/booking-money.ts): the rate each line was
+// agreed at, times how many of that line. total/months survives only for a
+// legacy booking with no items and no header rate, where nothing better exists.
 function contractMonthly(c) {
   const bk = c.booking || {};
+  const items = bk.items || [];
+  if (items.length) {
+    return items.reduce((sum, it) => sum + (it.monthlyPrice || 0) * (it.qty || 1), 0);
+  }
+  if (bk.monthlyPrice) return bk.monthlyPrice * (bk.qty || 1);
   return bk.months ? Math.round((bk.total || 0) / bk.months) : (bk.total || 0);
 }
 
