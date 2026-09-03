@@ -8384,6 +8384,223 @@ function FieldLabel({ children }) {
   return <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
 }
 
+// ── Platform tab → SMS xabar shablonlari ────────────────────
+// Every automatic message, editable. The texts used to live in the API source,
+// so changing a comma was a deploy; here an operator rewords them, sees the
+// sentence a tenant would get, and saves.
+//
+// SMS is charged per segment and a single "·" or "—" pushes a message out of
+// the 7-bit alphabet — 160 characters per segment becomes 70. That is real
+// money on a debtor sweep, so the editor counts segments rather than letters.
+const GSM7 =
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡" +
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà';
+const GSM7_EXT = '^{}\\[~]|€';
+
+function smsCost(text) {
+  let septets = 0;
+  let gsm = true;
+  for (const ch of text) {
+    if (GSM7.indexOf(ch) >= 0) septets += 1;
+    else if (GSM7_EXT.indexOf(ch) >= 0) septets += 2;
+    else { gsm = false; break; }
+  }
+  const chars = [...text].length;
+  if (!gsm) return { chars, unicode: true, parts: chars === 0 ? 0 : chars <= 70 ? 1 : Math.ceil(chars / 67) };
+  return { chars, unicode: false, parts: septets === 0 ? 0 : septets <= 160 ? 1 : Math.ceil(septets / 153) };
+}
+
+const TPL_PLACEHOLDER = /\{([a-z_]+)\}/g;
+const fillTemplate = (text, vars) =>
+  String(text).replace(TPL_PLACEHOLDER, (whole, name) => (name in vars ? vars[name] : whole));
+
+// Which heading a template sits under. Grouped by the event, not by SmsKind:
+// the three "payment received" texts are one situation with three endings.
+const TPL_GROUPS = [
+  { keys: ['booking_approved', 'booking_rejected'], title: 'Bandlov' },
+  { keys: ['payment_received', 'payment_received_settled', 'payment_received_prepaid'], title: "To'lov qabul qilinganda" },
+  { keys: ['invoice_ready'], title: 'Hisob-faktura' },
+  { keys: ['contract_expiring'], title: 'Shartnoma' },
+  { keys: ['payment_reminder_soft', 'payment_reminder_firm', 'payment_reminder_final', 'payment_reminder_host'], title: 'Qarz eslatmalari' },
+];
+
+function SmsTemplateEditor({ t, text, onChange, onReset }) {
+  const ref = React.useRef(null);
+  const samples = Object.fromEntries((t.vars || []).map((v) => [v.name, v.sample]));
+  const allowed = new Set((t.vars || []).map((v) => v.name));
+  const used = [...new Set([...String(text).matchAll(TPL_PLACEHOLDER)].map((m) => m[1]))];
+  const unknown = used.filter((p) => !allowed.has(p));
+  const cost = smsCost(text);
+  const edited = text !== t.default;
+
+  // Insert at the caret, not at the end: an operator placing {summa} mid-
+  // sentence should not have to retype the rest of it.
+  const insert = (name) => {
+    const el = ref.current;
+    const from = el && typeof el.selectionStart === 'number' ? el.selectionStart : text.length;
+    const to = el && typeof el.selectionEnd === 'number' ? el.selectionEnd : from;
+    const token = `{${name}}`;
+    onChange(text.slice(0, from) + token + text.slice(to));
+    requestAnimationFrame(() => {
+      if (!el) return;
+      el.focus();
+      const at = from + token.length;
+      el.setSelectionRange(at, at);
+    });
+  };
+
+  return (
+    <div style={{ padding: '14px 0', borderTop: '1px solid var(--g-line)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+            {t.label}
+            {edited && <span style={{ marginLeft: 7, font: `700 10.5px ${window.GO.font}`, color: 'var(--g-brand-ink)' }}>O'ZGARTIRILGAN</span>}
+          </div>
+          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>{t.when}</div>
+        </div>
+        {edited && (
+          <button onClick={onReset} style={{
+            border: 0, background: 'transparent', cursor: 'pointer', whiteSpace: 'nowrap',
+            font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)', padding: 0,
+          }}>Asliga qaytarish</button>
+        )}
+      </div>
+
+      <textarea
+        ref={ref}
+        className="adm-input"
+        rows={3}
+        value={text}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: '100%', marginTop: 9, resize: 'vertical', lineHeight: 1.45, fontFamily: window.GO.font }}
+      />
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 8 }}>
+        {(t.vars || []).map((v) => (
+          <button key={v.name} onClick={() => insert(v.name)} title={v.about} style={{
+            padding: '3px 9px', borderRadius: 999, border: '1px solid var(--g-line)', cursor: 'pointer',
+            background: 'var(--g-bg)', color: 'var(--g-ink-2)', font: `600 11px ui-monospace, monospace`,
+          }}>{`{${v.name}}`}</button>
+        ))}
+        <div style={{ marginLeft: 'auto', font: `500 11.5px ${window.GO.font}`, color: cost.parts > 1 ? 'oklch(0.5 0.14 55)' : 'var(--g-ink-4)' }}>
+          {cost.chars} belgi · {cost.parts} SMS{cost.unicode ? ' (maxsus belgilar)' : ''}
+        </div>
+      </div>
+
+      {unknown.length > 0 ? (
+        <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+          Noma'lum o'zgaruvchi: {unknown.map((u) => `{${u}}`).join(', ')} — mijozga shu holicha yuboriladi.
+        </div>
+      ) : (
+        <div style={{ marginTop: 8, padding: '8px 11px', borderRadius: 9, background: 'var(--g-bg)', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+          <span style={{ color: 'var(--g-ink-4)' }}>Namuna: </span>{fillTemplate(text, samples) || '—'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SmsTemplatesCard() {
+  const [rows, setRows] = React.useState(null); // null = yuklanmoqda
+  const [draft, setDraft] = React.useState({});
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const [savedAt, setSavedAt] = React.useState(0);
+
+  const adopt = (list) => {
+    setRows(list);
+    setDraft(Object.fromEntries(list.map((t) => [t.key, t.text])));
+  };
+  React.useEffect(() => {
+    api.get('/sms/templates').then(adopt).catch((e) => setErr(e?.message || 'Shablonlar yuklanmadi'));
+  }, []);
+
+  if (err && !rows) {
+    return (
+      <Card>
+        <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Xabar shablonlari</div>
+        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>{err}</div>
+      </Card>
+    );
+  }
+
+  const changed = (rows || []).filter((t) => draft[t.key] !== t.text);
+  // The API refuses these too — caught here so the operator sees which line is
+  // wrong instead of one message about the whole save.
+  const broken = (rows || []).filter((t) => {
+    const allowed = new Set((t.vars || []).map((v) => v.name));
+    return [...String(draft[t.key] ?? '').matchAll(TPL_PLACEHOLDER)].some((m) => !allowed.has(m[1]));
+  });
+
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const patch = Object.fromEntries(changed.map((t) => [t.key, draft[t.key]]));
+      adopt(await api.put('/sms/templates', { templates: patch }));
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr(e?.message || 'Saqlanmadi');
+    }
+    setBusy(false);
+  };
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconMessage size={16} /></span>
+        <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Xabar shablonlari</div>
+      </div>
+      <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 2px' }}>
+        Avtomatik xabarlar matni. {'{'}qavs{'}'} ichidagi o'zgaruvchilar yuborishda haqiqiy qiymatga almashadi.
+        Telegramga ulangan ijarachiga ham shu matn boradi.
+      </div>
+
+      {!rows ? (
+        <div style={{ padding: '18px 0', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>
+      ) : (
+        TPL_GROUPS.map((g) => {
+          const list = g.keys.map((k) => rows.find((t) => t.key === k)).filter(Boolean);
+          if (!list.length) return null;
+          return (
+            <div key={g.title} style={{ marginTop: 16 }}>
+              <div style={{ font: `700 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', letterSpacing: '0.04em' }}>{g.title.toUpperCase()}</div>
+              {list.map((t) => (
+                <SmsTemplateEditor
+                  key={t.key}
+                  t={t}
+                  text={draft[t.key] ?? ''}
+                  onChange={(v) => setDraft((d) => ({ ...d, [t.key]: v }))}
+                  onReset={() => setDraft((d) => ({ ...d, [t.key]: t.default }))}
+                />
+              ))}
+            </div>
+          );
+        })
+      )}
+
+      {err && rows && (
+        <div style={{ marginTop: 14, padding: '9px 12px', borderRadius: 9, background: 'oklch(0.96 0.04 25)', font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 16 }}>
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+          {broken.length > 0
+            ? "Noma'lum o'zgaruvchi bor — tuzating"
+            : changed.length
+              ? `${changed.length} ta shablon o'zgardi`
+              : savedAt
+                ? 'Saqlandi'
+                : "O'zgarish yo'q"}
+        </div>
+        <Btn kind="primary" onClick={save} disabled={busy || !changed.length || broken.length > 0}>
+          {busy ? 'Saqlanmoqda…' : "Shablonlarni saqlash"}
+        </Btn>
+      </div>
+    </Card>
+  );
+}
+
 // ── Platform tab ────────────────────────────────────────────
 function PlatformTab() {
   const init = (window.SETTINGS && window.SETTINGS.platform) || {};
@@ -8689,6 +8906,10 @@ function PlatformTab() {
           <Btn kind="primary" onClick={save} disabled={!daysValid}>O'zgarishlarni saqlash</Btn>
         </div>
       </Card>
+
+      {/* Saves on its own button — the texts are a separate endpoint, and
+          nothing here belongs to the settings form above. */}
+      <SmsTemplatesCard />
     </div>
   );
 }
