@@ -226,7 +226,7 @@ async function bootstrap() {
   try {
     window.DEBTORS = await get('/debtors');
   } catch {
-    window.DEBTORS = { totals: { outstanding: 0, prepaid: 0, debtorCount: 0 }, rows: [] };
+    window.DEBTORS = { totals: { outstanding: 0, prepaid: 0, prepaidCount: 0, debtorCount: 0 }, rows: [], prepaid: [] };
   }
 
   window.BUILDINGS = buildings;   // each includes offerings: [{product, units, price, status}]

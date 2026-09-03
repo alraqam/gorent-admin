@@ -5866,7 +5866,7 @@ function MiniStat({ label, value, unit, tone }) {
   return (
     <div>
       <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{label}</div>
-      <div style={{ font: `700 19px ${window.GO.font}`, color: tone === 'bad' ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)', marginTop: 3 }}>
+      <div style={{ font: `700 19px ${window.GO.font}`, color: tone === 'bad' ? 'oklch(0.5 0.16 25)' : tone === 'good' ? 'oklch(0.5 0.13 155)' : 'var(--g-ink)', marginTop: 3 }}>
         {value}{unit && <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}> {unit}</span>}
       </div>
     </div>
@@ -6231,7 +6231,11 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
           <div className="adm-scroll" style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
             <Card pad={16} style={{ marginBottom: 16 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
-                <MiniStat label="Qarz" value={window.fmtCompactSom(Math.max(0, row.outstanding))} tone={row.outstanding > 0 ? 'bad' : undefined} />
+                {/* The drawer opens from the credit tab too, where a flat
+                    "Qarz: 0" hides the very number the row was opened for. */}
+                {row.outstanding < 0
+                  ? <MiniStat label="Oldindan" value={window.fmtCompactSom(-row.outstanding)} tone="good" />
+                  : <MiniStat label="Qarz" value={window.fmtCompactSom(row.outstanding)} tone={row.outstanding > 0 ? 'bad' : undefined} />}
                 <MiniStat label="To'langan" value={window.fmtCompactSom(row.paid)} />
                 <MiniStat label="Kechikish" value={String(row.daysOverdue || 0)} unit="kun" tone={row.daysOverdue > 0 ? 'bad' : undefined} />
               </div>
@@ -7245,6 +7249,76 @@ function BankStatementPanel() {
   );
 }
 
+// ── Qarzdorlik → Oldindan to'lovlar ─────────────────────────
+// The credit side of the debtors book: leases whose payments run ahead of what
+// has been billed. Kept off the debtors table (nobody is chased for a credit)
+// but not off the screen — on a live lease the credit is rent already covered,
+// and on a finished one it is money the tenant is owed back.
+function PrepaidPanel({ rows, onRow }) {
+  // Off the rows on screen rather than the book-wide total, so the cards
+  // never disagree with the table under a search.
+  const credit = (list) => list.reduce((s, r) => s + Math.abs(r.outstanding), 0);
+  const refunds = rows.filter((r) => r.group === 'former');
+  const columns = [
+    { key: 'cust', label: 'Mijoz', render: (r) => (
+      <PersonCell name={r.customer} sub={`${r.company?.name ? r.company.name + ' · ' : ''}+${r.phone}`} hue={nameHue(r.customer)} />
+    ) },
+    { key: 'place', label: 'Joy', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{r.building} · {r.unit}</div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>{r.product} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{r.bookingId}</span></div>
+      </div>
+    ) },
+    { key: 'period', label: 'Muddat', render: (r) => (
+      <div style={{ minWidth: 0 }}>
+        <span style={{ font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'nowrap' }}>{fmtDate(r.start)} – {fmtDate(r.end)}</span>
+        {/* The lease is over, so this credit is not next month's rent — it is
+            a refund. Said on the row, because the two read identically in the
+            money columns. */}
+        {r.group === 'former' && (
+          <div style={{ marginTop: 3 }}><Chip hue={45}>QAYTARISH KERAK</Chip></div>
+        )}
+      </div>
+    ) },
+    { key: 'expected', label: 'Hisoblangan', align: 'right', render: (r) => (
+      <div style={{ whiteSpace: 'nowrap' }}>
+        <MoneyCell n={r.expected} />
+        {/* What the credit is most often for: the month still running, which
+            is not billed yet and so is not in `expected`. */}
+        {r.accruing > 0 && (
+          <div title="Joriy oy — oy oxirida hisob-faktura qilinadi" style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 1 }}>
+            +{window.fmtSom(r.accruing)} joriy oy
+          </div>
+        )}
+      </div>
+    ) },
+    { key: 'paid', label: "To'langan", align: 'right', render: (r) => <MoneyCell n={r.paid} /> },
+    { key: 'credit', label: 'Oldindan', align: 'right', render: (r) => (
+      <div style={{ font: `700 13.5px ${window.GO.font}`, color: 'oklch(0.5 0.13 155)', whiteSpace: 'nowrap' }}>
+        {window.fmtSom(Math.abs(r.outstanding))} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm</span>
+      </div>
+    ) },
+    { key: 'notes', label: 'Izoh', render: (r) => <NotesCell n={r.notes} /> },
+  ];
+
+  return (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 18 }}>
+        <MoneyStatCard icon={<IconWallet size={17} />} label="Jami oldindan to'lov" value={window.fmtCompactSom(credit(rows))} color="oklch(0.5 0.13 155)" />
+        <MoneyStatCard icon={<IconUsers size={17} />} label="Mijozlar soni" value={String(rows.length)} unit="ta" />
+        <MoneyStatCard icon={<IconClock size={17} />} label="Qaytarish kerak" value={window.fmtCompactSom(credit(refunds))} color={refunds.length ? 'oklch(0.5 0.14 45)' : 'var(--g-ink)'} />
+      </div>
+
+      <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', margin: '-4px 0 14px' }}>
+        To'lovi hisoblangan summadan ko'p bo'lgan ijarachilar. Joriy ijarada — keyingi oy hisobiga; ijara tugagan bo'lsa — qaytarilishi kerak.
+      </div>
+
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} onRow={onRow}
+        empty="Oldindan to'lovlar yo'q" />
+    </>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 };
@@ -7261,11 +7335,15 @@ function DebtorsScreen({ search }) {
   const isPlatform = (api.currentUser() || {}).role === 'platform';
   const former = tab === 'former';
 
-  let rows = (data.rows || []).filter((r) => (r.group === 'former') === former);
-  if (search) {
+  const applySearch = (list) => {
+    if (!search) return list;
     const q = search.toLowerCase();
-    rows = rows.filter((r) => `${r.customer} ${r.company?.name || ''} ${r.building} ${r.unit}`.toLowerCase().includes(q));
-  }
+    return list.filter((r) => `${r.customer} ${r.company?.name || ''} ${r.building} ${r.unit}`.toLowerCase().includes(q));
+  };
+  const rows = applySearch((data.rows || []).filter((r) => (r.group === 'former') === former));
+  // Tenants in credit — the other side of the same book, on their own tab so
+  // the debtors table stays a list of people to chase.
+  const prepaidRows = applySearch(data.prepaid || []);
   const groupTotals = (former ? totals.former : totals.current) || { outstanding: 0, count: 0, maxDaysOverdue: 0 };
 
   // Open the collection drawer from anywhere that knows only a booking id —
@@ -7381,6 +7459,10 @@ function DebtorsScreen({ search }) {
           {[
             { id: 'current', label: `Joriy ijarachilar${totals.current?.count ? ` · ${totals.current.count}` : ''}` },
             { id: 'former', label: `Sobiq ijarachilar${totals.former?.count ? ` · ${totals.former.count}` : ''}` },
+            // Money in ahead of the bill. Its own tab because it is the
+            // opposite job: nobody is chased, but a credit on a finished lease
+            // is a refund waiting to be paid back.
+            { id: 'prepaid', label: `Oldindan to'lovlar${totals.prepaidCount ? ` · ${totals.prepaidCount}` : ''}` },
             // Host-visible too: the calendar is their own leases and their own
             // follow-ups, scoped server-side.
             { id: 'calendar', label: 'Kalendar' },
@@ -7409,6 +7491,7 @@ function DebtorsScreen({ search }) {
       {tab === 'blacklist' && isPlatform ? <BlacklistPanel search={search} /> :
        tab === 'reminders' && isPlatform ? <RemindersPanel /> :
        tab === 'bank' ? <BankStatementPanel /> :
+       tab === 'prepaid' ? <PrepaidPanel rows={prepaidRows} onRow={setDetail} /> :
        tab === 'calendar' ? <DebtCalendarPanel onOpen={openBooking} /> : (
       <>
       <WorklistStrip onOpen={openBooking} version={noteVersion} />
