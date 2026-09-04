@@ -5756,7 +5756,9 @@ function RemindersPanel() {
   if (err) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div></Card>;
   if (!data) return <Card><div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div></Card>;
 
-  const live = data.smsEnabled && data.remindersEnabled;
+  // Either channel delivering counts as live — Telegram alone still reaches
+  // every linked tenant.
+  const live = (data.smsEnabled || data.telegramEnabled) && data.remindersEnabled;
   const sent = (log || []).filter((m) => m.status === 'sent').length;
   const failed = (log || []).filter((m) => m.status === 'failed').length;
 
@@ -8667,6 +8669,7 @@ function PlatformTab() {
   const initN = (window.SETTINGS && window.SETTINGS.notifications) || {};
   const [n, setN] = React.useState({
     smsEnabled: initN.smsEnabled ?? false,
+    telegramEnabled: initN.telegramEnabled ?? true,
     smsOnBookingApproved: initN.smsOnBookingApproved ?? true,
     smsOnBookingRejected: initN.smsOnBookingRejected ?? true,
     smsOnPaymentReminder: initN.smsOnPaymentReminder ?? false,
@@ -8676,6 +8679,10 @@ function PlatformTab() {
   });
   const tn = (k) => setN((p) => ({ ...p, [k]: !p[k] }));
   const setN1 = (k, v) => setN((p) => ({ ...p, [k]: v }));
+  // The per-event switches below decide WHICH events notify; the two
+  // channel switches decide HOW. So the events section is live whenever
+  // either channel is, not just when paid SMS is on.
+  const anyChannel = n.smsEnabled || n.telegramEnabled;
   // "3, 7, 14" ⇄ [3,7,14]. Kept as free text while editing so a half-typed
   // value doesn't fight the user; parsed on save.
   const [daysText, setDaysText] = React.useState((initN.paymentReminderDays ?? [3, 7, 14]).join(', '));
@@ -8838,21 +8845,24 @@ function PlatformTab() {
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconMessage size={16} /></span>
-          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>SMS bildirishnomalari</div>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Bildirishnomalar</div>
         </div>
-        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 2px' }}>Eskiz.uz orqali mijozlarga avtomatik SMS xabarlar.</div>
-        <Row title="SMS bildirishnomalar" sub="Asosiy kalit — barcha SMS xabarlarni yoqish yoki o'chirish.">
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 2px' }}>Ijarachiga Telegram orqali (agar ulangan bo'lsa), aks holda SMS orqali yuboriladi.</div>
+        <Row title="Telegram" sub="Botga ulangan ijarachilarga. Bepul — Eskiz o'chirilgan bo'lsa ham ishlaydi.">
+          <Toggle on={n.telegramEnabled} onClick={() => tn('telegramEnabled')} />
+        </Row>
+        <Row title="SMS (Eskiz.uz)" sub="Botga ulanmagan ijarachilarga. Har bir xabar pullik.">
           <Toggle on={n.smsEnabled} onClick={() => tn('smsEnabled')} />
         </Row>
-        <div style={{ opacity: n.smsEnabled ? 1 : 0.45, pointerEvents: n.smsEnabled ? 'auto' : 'none', transition: 'opacity .15s' }}>
+        <div style={{ opacity: anyChannel ? 1 : 0.45, pointerEvents: anyChannel ? 'auto' : 'none', transition: 'opacity .15s' }}>
           <Row title="Bandlov tasdiqlanganda" sub="Bandlov tasdiqlanganda mijozga SMS yuboriladi.">
-            <Toggle on={n.smsEnabled && n.smsOnBookingApproved} onClick={() => tn('smsOnBookingApproved')} />
+            <Toggle on={anyChannel && n.smsOnBookingApproved} onClick={() => tn('smsOnBookingApproved')} />
           </Row>
           <Row title="Bandlov bekor qilinganda" sub="Bandlov bekor qilinganda mijozga SMS yuboriladi.">
-            <Toggle on={n.smsEnabled && n.smsOnBookingRejected} onClick={() => tn('smsOnBookingRejected')} />
+            <Toggle on={anyChannel && n.smsOnBookingRejected} onClick={() => tn('smsOnBookingRejected')} />
           </Row>
           <Row title="To'lov eslatmalari" sub="Muddati o'tgan ijarachilarga avtomatik SMS. Har kuni 10:00 da tekshiriladi." last={!n.smsOnPaymentReminder}>
-            <Toggle on={n.smsEnabled && n.smsOnPaymentReminder} onClick={() => tn('smsOnPaymentReminder')} />
+            <Toggle on={anyChannel && n.smsOnPaymentReminder} onClick={() => tn('smsOnPaymentReminder')} />
           </Row>
           {n.smsOnPaymentReminder && (
             <div style={{ padding: '14px 0 2px', borderTop: '1px solid var(--g-line)' }}>
@@ -8892,14 +8902,14 @@ function PlatformTab() {
             </div>
           )}
         </div>
-        {n.smsEnabled && n.smsOnPaymentReminder && (
+        {anyChannel && n.smsOnPaymentReminder && (
           <div style={{
             marginTop: 14, padding: '10px 12px', borderRadius: 10,
             background: 'color-mix(in oklch, oklch(0.7 0.15 55) 10%, transparent)',
             font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)',
           }}>
-            Bu haqiqiy mijozlarga SMS yuboradi. Yoqishdan oldin <b>Qarzdorlik → Eslatmalar</b> bo'limida kimga
-            yuborilishini tekshiring.
+            Bu haqiqiy mijozlarga xabar yuboradi{n.smsEnabled ? ' (SMS — pullik)' : ' (faqat Telegram)'}. Yoqishdan oldin{' '}
+            <b>Qarzdorlik → Eslatmalar</b> bo'limida kimga yuborilishini tekshiring.
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
