@@ -5789,6 +5789,14 @@ function RemindersPanel() {
         {window.fmtSom(r.outstanding)} <span style={{ font: `400 11.5px ${window.GO.font}` }}>so'm</span>
       </div>
     ) },
+    // The collection case can hold a reminder back: a paused case, a debt
+    // already in the lawyers' hands, or a promise the tenant is still inside.
+    { key: 'sup', label: 'Undiruv', render: (r) => (
+      r.suppressed === 'paused' ? <Chip hue={200} title="Undiruv ishi to'xtatilgan — eslatma yuborilmaydi">to'xtatilgan</Chip>
+      : r.suppressed === 'legal' ? <Chip hue={25} title="Yuridik bosqichda — eslatma yuborilmaydi">yuridik</Chip>
+      : r.suppressed === 'promise' ? <Chip hue={55} title="To'lov va'dasi kutilmoqda — eslatma yuborilmaydi">va'da</Chip>
+      : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
+    ) },
     { key: 'host', label: 'Mezbon', align: 'right', render: (r) => (
       <span style={{ font: `400 12px ${window.GO.font}`, color: r.hostPhone ? 'var(--g-ink-3)' : 'var(--g-ink-4)', whiteSpace: 'nowrap' }}>
         {r.hostPhone ? `+${r.hostPhone}` : '—'}
@@ -5821,9 +5829,10 @@ function RemindersPanel() {
             <Btn kind="primary" sm onClick={runNow} disabled={busy}>{busy ? 'Ishlamoqda…' : 'Hozir tekshirish'}</Btn>
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginTop: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginTop: 18 }}>
           <MiniStat label="Eslatma kutayotgan" value={String(data.count)} unit="ta" />
           <MiniStat label="Jami qarz" value={window.fmtCompactSom(data.outstanding)} />
+          <MiniStat label="To'xtatilgan" value={String(data.suppressed || 0)} unit="ta" />
           <MiniStat label="Yuborilgan" value={String(sent)} unit="ta" />
           <MiniStat label="Xatolik" value={String(failed)} unit="ta" tone={failed ? 'bad' : undefined} />
         </div>
@@ -5957,17 +5966,219 @@ const EVENT_META = {
   invoice_run:     { label: 'Oy yakuni — ESF', hue: 155 },
 };
 
+// ═══ UNDIRUV: the escalation case ═══════════════════════════
+//
+// One debt, one case, one ladder: eslatma → ogohlantirish → pretenziya →
+// talabnoma (kartoteka) → sud → MIB. The engine climbs the first rungs on its
+// own; everything from the claim letter on is entered by an operator, because
+// each of those is a document with a number and a date behind it.
+
+const CASE_STAGE = {
+  reminder:    { label: 'Eslatma', hue: 250 },
+  warning:     { label: 'Ogohlantirish', hue: 55 },
+  claim_draft: { label: 'Pretenziya (loyiha)', hue: 40 },
+  claim:       { label: 'Pretenziya', hue: 25 },
+  demand:      { label: 'Talabnoma (kartoteka)', hue: 300 },
+  court:       { label: 'Sud', hue: 340 },
+  enforcement: { label: 'MIB', hue: 10 },
+};
+
+// Status wins over stage on a pill: a paused claim is "paused" first.
+const CASE_STATUS = {
+  paused: { label: "To'xtatilgan", hue: 200 },
+  closed: { label: 'Yopilgan', hue: 155 },
+};
+
+const CASE_CLOSE = {
+  paid:          "To'landi",
+  settled:       'Kelishuv bilan',
+  written_off:   'Hisobdan chiqarildi',
+  uncollectible: "Undirib bo'lmaydi",
+  cancelled:     'Bekor qilindi',
+};
+
+const CASE_STEP = {
+  opened:             'Ish ochildi',
+  warning:            'Ogohlantirish',
+  claim_draft:        'Pretenziya loyihasi',
+  claim:              'Pretenziya yuborildi',
+  claim_response:     'Pretenziyaga javob',
+  demand:             "To'lov talabnomasi",
+  demand_update:      'Talabnoma holati',
+  court:              'Sudga berildi',
+  court_hearing:      'Sud majlisi',
+  court_decision:     'Sud qarori',
+  enforcement:        'MIBga topshirildi',
+  enforcement_update: 'MIB holati',
+  terminate:          'Shartnomani bekor qilish',
+  blacklist:          "Qora ro'yxatga",
+  pause:              "To'xtatish",
+  resume:             'Davom ettirish',
+  close:              'Yopish',
+  reopen:             'Qayta ochish',
+};
+
+// The step that moves a case up the ladder from each stage — drawn as the
+// primary button so the operator sees what comes next at a glance.
+const CASE_FORWARD = {
+  reminder: 'warning', warning: 'claim_draft', claim_draft: 'claim',
+  claim: 'demand', demand: 'court', court: 'enforcement',
+};
+
+// What each step asks for. ONE generic form is rendered from this table, so a
+// new step kind is a row here, not a component.
+const STEP_FIELDS = (() => {
+  const o = (value, label) => ({ value, label });
+  const f = (k, label, type = 'text', required = false, options) => ({ k, label, type, required, options });
+  const note = (label = 'Izoh') => f('note', label, 'textarea');
+  return {
+    warning:     [note()],
+    claim_draft: [note()],
+    claim: [
+      f('number', 'Pretenziya raqami', 'text', true),
+      f('sentAt', 'Yuborilgan sana', 'date', true),
+      f('sentVia', 'Yuborish usuli', 'enum', true, [
+        o('pochta', 'Pochta'), o('kuryer', 'Kuryer'), o('qolda', "Qo'lda topshirildi"),
+        o('email', 'Email'), o('telegram', 'Telegram'), o('boshqa', 'Boshqa'),
+      ]),
+      f('trackingNo', 'Pochta/kuryer raqami'),
+      f('deliveredAt', 'Topshirilgan sana', 'date'),
+      f('responseDueAt', 'Javob muddati', 'date', true),
+      note(),
+    ],
+    claim_response: [
+      f('receivedAt', 'Javob sanasi', 'date', true),
+      f('outcome', 'Natija', 'enum', true, [
+        o('paid', "To'ladi"), o('partial', 'Qisman'), o('plan', 'Jadval taklif qildi'),
+        o('refused', 'Rad etdi'), o('silent', "Javob yo'q"),
+      ]),
+      note(),
+    ],
+    demand: [
+      f('bank', 'Ijarachi banki', 'text', true),
+      f('mfo', 'MFO', 'text', true),
+      f('account', 'Hisob raqami', 'text', true),
+      f('docNumber', 'Talabnoma raqami', 'text', true),
+      f('lodgedAt', "Bankka qo'yilgan sana", 'date', true),
+      f('amount', 'Summa', 'money', true),
+      f('acceptanceClause', 'Shartnomadagi aksept bandi'),
+      note(),
+    ],
+    demand_update: [
+      f('at', 'Sana', 'date', true),
+      f('status', 'Holat', 'enum', true, [
+        o('accepted', 'Bank qabul qildi'), o('rejected', 'Bank rad etdi'), o('partial', 'Qisman undirildi'),
+        o('in_kartoteka', 'Kartotekada'), o('withdrawn', 'Qaytarib olindi'),
+      ]),
+      f('collectedAmount', 'Undirilgan summa', 'money'),
+      note(),
+    ],
+    court: [
+      f('court', 'Sud', 'text', true),
+      f('caseNumber', 'Ish raqami', 'text', true),
+      f('filedAt', 'Berilgan sana', 'date', true),
+      f('claimAmount', "Da'vo summasi", 'money', true),
+      f('stateDuty', 'Davlat boji', 'money'),
+      note(),
+    ],
+    court_hearing: [
+      f('at', 'Majlis sanasi', 'date', true),
+      f('outcome', 'Natija'),
+      note(),
+    ],
+    court_decision: [
+      f('decidedAt', 'Qaror sanasi', 'date', true),
+      f('awarded', 'Undirishga qaror qilingan summa', 'money', true),
+      f('writNumber', 'Ijro varaqasi raqami'),
+      f('writIssuedAt', 'Ijro varaqasi sanasi', 'date'),
+      note(),
+    ],
+    enforcement: [
+      f('mibOffice', "MIB bo'limi", 'text', true),
+      f('handedAt', 'Topshirilgan sana', 'date', true),
+      f('executor', 'Ijrochi'),
+      f('proceedingNo', 'Ijro ishi raqami'),
+      note(),
+    ],
+    enforcement_update: [
+      f('at', 'Sana', 'date', true),
+      f('collectedAmount', 'Undirilgan summa', 'money'),
+      note(),
+    ],
+    terminate: [note('Sabab')],
+    blacklist: [
+      f('reason', 'Sabab', 'text', true),
+      note('Izoh (sud ishi raqami va h.k.)'),
+    ],
+    pause: [
+      f('until', 'Qachongacha', 'date', true),
+      f('reason', 'Sabab', 'enum', true, [
+        o('promise', "To'lov va'dasi"), o('agreement', 'Kelishuv'), o('plan', "To'lov jadvali"), o('other', 'Boshqa'),
+      ]),
+      note(),
+    ],
+    resume: [note()],
+    close: [
+      f('reason', 'Sabab', 'enum', true, Object.entries(CASE_CLOSE).map(([value, label]) => o(value, label))),
+      note(),
+    ],
+    reopen: [f('note', 'Izoh', 'textarea', true)],
+  };
+})();
+
+// One value, the way the step table says to show it.
+function stepValueLabel(field, v) {
+  if (v === undefined || v === null || v === '') return '—';
+  if (field.type === 'money') return `${window.fmtSom(Number(v))} so'm`;
+  if (field.type === 'date') return fmtDate(v);
+  if (field.type === 'enum') return ((field.options || []).find((x) => x.value === v) || {}).label || String(v);
+  return String(v);
+}
+
 const toneOf = (hue) => ({
   color: `oklch(0.44 0.15 ${hue})`,
   background: `color-mix(in oklch, oklch(0.6 0.16 ${hue}) 14%, transparent)`,
 });
 
-function Chip({ hue, children, style }) {
+function Chip({ hue, children, style, ...rest }) {
   return (
-    <span style={{
+    <span {...rest} style={{
       display: 'inline-block', padding: '2px 8px', borderRadius: 999, whiteSpace: 'nowrap',
       font: `700 11px ${window.GO.font}`, ...toneOf(hue), ...style,
     }}>{children}</span>
+  );
+}
+
+// ─── Case pill + the debtors-table cell ─────────────────────
+function CaseStagePill({ c, style }) {
+  if (!c) return null;
+  const m = CASE_STATUS[c.status] || CASE_STAGE[c.stage] || { label: c.stage, hue: 200 };
+  return <Chip hue={m.hue} style={style} title={c.nextActionLabel || undefined}>{m.label}</Chip>;
+}
+
+// Overdue means "before today", not "before this second": a task due today
+// is today's work, not a lapse.
+function caseActionLate(c) {
+  if (!c || c.status !== 'open' || !c.nextActionAt) return false;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return new Date(c.nextActionAt).getTime() < today.getTime();
+}
+
+function CaseCell({ c }) {
+  if (!c) return <span style={{ color: 'var(--g-ink-4)' }}>—</span>;
+  const late = caseActionLate(c);
+  return (
+    <div style={{ minWidth: 0 }}>
+      <CaseStagePill c={c} />
+      {(c.nextActionLabel || c.nextActionAt) && (
+        <div title={c.nextActionLabel || ''} style={{
+          font: `${late ? 600 : 400} 11.5px ${window.GO.font}`, color: late ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-4)',
+          marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 190,
+        }}>
+          {c.nextActionLabel}{c.nextActionAt ? `${c.nextActionLabel ? ' · ' : ''}${fmtDate(c.nextActionAt)}` : ''}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -6119,6 +6330,7 @@ function DebtNoteItem({ n, onChanged }) {
           <Chip hue={kind.hue}>{kind.label}</Chip>
           {n.pinned && <Chip hue={30}>MUHIM</Chip>}
           {n.internal && <Chip hue={300}>ICHKI</Chip>}
+          {n.sourceKey && <Chip hue={200} title="Undiruv tizimi yaratgan topshiriq">tizim</Chip>}
           {promise && (
             <Chip hue={pm.hue}>
               {window.fmtSom(n.promisedAmount)} · {fmtDate(n.promisedDate)} — {pm.label}
@@ -6156,19 +6368,95 @@ function DebtNoteItem({ n, onChanged }) {
   );
 }
 
+// ─── One recorded step in the case timeline ─────────────────
+function CaseStepItem({ s }) {
+  const hue = (CASE_STAGE[s.toStage] || {}).hue ?? 200;
+  const fields = STEP_FIELDS[s.kind] || [];
+  const data = s.data || {};
+  const shown = fields
+    .filter((x) => x.k !== 'note' && data[x.k] !== undefined && data[x.k] !== null && data[x.k] !== '')
+    .slice(0, 4);
+  const moved = s.fromStage && s.toStage && s.fromStage !== s.toStage;
+  return (
+    <div style={{ display: 'flex', gap: 11, padding: '11px 0', borderBottom: '1px solid var(--g-line)' }}>
+      <span style={{ marginTop: 6, width: 7, height: 7, borderRadius: 999, flexShrink: 0, background: `oklch(0.6 0.16 ${hue})` }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+          <Chip hue={hue}>{s.label || CASE_STEP[s.kind] || s.kind}</Chip>
+          {moved && (
+            <span style={{ font: `500 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              {(CASE_STAGE[s.fromStage] || {}).label || s.fromStage} → {(CASE_STAGE[s.toStage] || {}).label || s.toStage}
+            </span>
+          )}
+        </div>
+        {s.summary && <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{s.summary}</div>}
+        {shown.length > 0 && (
+          <div style={{ display: 'flex', gap: '4px 14px', flexWrap: 'wrap', marginTop: 4, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+            {shown.map((x) => (
+              <span key={x.k}><span style={{ color: 'var(--g-ink-4)' }}>{x.label}:</span> {stepValueLabel(x, data[x.k])}</span>
+            ))}
+          </div>
+        )}
+        {data.note && <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'pre-wrap', marginTop: 4 }}>{data.note}</div>}
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 5 }}>
+          {fmtDate(s.at)} · {s.authorEmail || (s.authorRole === 'system' ? 'tizim' : '—')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── One reminder that went (or failed to go) out ───────────
+function CaseMessageItem({ m }) {
+  const dot = m.status === 'sent' ? 'oklch(0.6 0.14 155)' : m.status === 'failed' ? 'oklch(0.6 0.16 25)' : 'oklch(0.7 0.1 250)';
+  const text = String(m.message || '');
+  return (
+    <div style={{ display: 'flex', gap: 11, padding: '8px 0', borderBottom: '1px solid var(--g-line)' }}>
+      <span style={{ marginTop: 5, width: 7, height: 7, borderRadius: 999, flexShrink: 0, background: dot }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
+          <span style={{ fontWeight: 600 }}>{m.channel === 'telegram' ? 'Telegram' : 'SMS'}</span>
+          {' · '}{text.length > 90 ? `${text.slice(0, 90)}…` : text}
+        </div>
+        <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2 }}>
+          {m.phone ? `+${m.phone} · ` : ''}{fmtDate(m.sentAt || m.at)}
+          {m.status === 'queued' && ' · navbatda'}
+          {m.status === 'failed' && <span style={{ color: 'oklch(0.5 0.16 25)' }}> · {m.error || 'yuborilmadi'}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Timeline for one lease (or the whole tenant) ───────────
 // Tenant scope is how a renewal keeps its history: a renewed lease is a new
 // booking but the same Company.
-function DebtNotesPanel({ bookingId, companyId, onChanged, hostId }) {
+//
+// With a `caseId` the panel shows the case's merged timeline instead — notes,
+// recorded steps and the reminders that went out, one list, newest first.
+// `version` is bumped by the case card after a step so the list reloads.
+function DebtNotesPanel({ bookingId, companyId, onChanged, hostId, caseId, version }) {
   const [notes, setNotes] = React.useState(null);
   const [scope, setScope] = React.useState('booking');
   const [adding, setAdding] = React.useState(false);
 
+  // The drawer starts without a case id and gains one a moment later, so two
+  // loads race on every open; only the latest may set the list, or the plain
+  // notes answer can land on top of the case timeline.
+  const reqRef = React.useRef(0);
+  React.useEffect(() => () => { reqRef.current++; }, []);
   const load = React.useCallback(() => {
     setNotes(null);
+    const id = ++reqRef.current;
+    const settle = (rows) => { if (id === reqRef.current) setNotes(rows); };
+    if (caseId) {
+      api.get(`/collection/${encodeURIComponent(caseId)}`)
+        .then((c) => settle((c && c.timeline) || [])).catch(() => settle([]));
+      return;
+    }
     api.get(`/debt-notes?booking=${encodeURIComponent(bookingId)}&scope=${scope}`)
-      .then(setNotes).catch(() => setNotes([]));
-  }, [bookingId, scope]);
+      .then(settle).catch(() => settle([]));
+  }, [bookingId, scope, caseId, version]);
   React.useEffect(() => { load(); }, [load]);
 
   // A note can change a row's warning state, so the debtors table is refreshed
@@ -6179,10 +6467,10 @@ function DebtNotesPanel({ bookingId, companyId, onChanged, hostId }) {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)' }}>
-          Izohlar va ish rejasi{notes ? ` · ${notes.length}` : ''}
+          {caseId ? 'Undiruv tarixi' : 'Izohlar va ish rejasi'}{notes ? ` · ${notes.length}` : ''}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {companyId && (
+          {companyId && !caseId && (
             <Segmented
               value={scope}
               onChange={setScope}
@@ -6207,14 +6495,275 @@ function DebtNotesPanel({ bookingId, companyId, onChanged, hostId }) {
           ? <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
               Hali izoh yo'q. Qo'ng'iroq, va'da yoki kelishuvni shu yerga yozing — keyin kim nima deganini eslab qolish shart bo'lmaydi.
             </div>
-          : <div>{notes.map((n) => <DebtNoteItem key={n.id} n={n} onChanged={changed} />)}</div>}
+          : <div>{notes.map((it, i) => {
+              // Plain notes list (no case) — rows are DebtNoteViews as before.
+              if (!caseId) return <DebtNoteItem key={it.id} n={it} onChanged={changed} />;
+              if (it.type === 'note') return <DebtNoteItem key={`n-${it.note.id}`} n={it.note} onChanged={changed} />;
+              if (it.type === 'step') return <CaseStepItem key={`s-${it.id || i}`} s={it} />;
+              if (it.type === 'message') return <CaseMessageItem key={`m-${it.id || i}`} m={it} />;
+              return null;
+            })}</div>}
     </div>
+  );
+}
+
+// ─── Record one step on a case ──────────────────────────────
+// One form for every step kind, drawn from STEP_FIELDS. The API validates
+// again; the required check here only saves the round trip.
+function CaseStepForm({ caseId, kind, onDone, onCancel }) {
+  const fields = STEP_FIELDS[kind] || [];
+  const [f, setF] = React.useState(() => Object.fromEntries(fields.map((x) => [x.k, ''])));
+  const [at, setAt] = React.useState(isoToday());
+  const [summary, setSummary] = React.useState('');
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
+
+  // Kinds that record an event date of their own ("Majlis sanasi", "Sana")
+  // use it as the step date too — one date on the form, not two.
+  const hasOwnAt = fields.some((x) => x.k === 'at');
+  const missing = fields.filter((x) => x.required && !String(f[x.k] ?? '').trim());
+  // The server wants whole so'm; catch a decimal before the round trip.
+  const badMoney = fields.filter((x) => x.type === 'money' && String(f[x.k] ?? '').trim() !== '' && !Number.isInteger(Number(f[x.k])));
+  const pastPause = kind === 'pause' && !!f.until && f.until < isoToday(1);
+  const problem = badMoney.length ? `${badMoney[0].label}: butun son bo'lishi kerak`
+    : pastPause ? "To'xtatish sanasi ertadan boshlab bo'lishi kerak" : null;
+  const canSubmit = missing.length === 0 && !problem && (hasOwnAt || !!at);
+  // A day chosen on the form means that day's local midnight.
+  const localMidnight = (d) => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).toISOString(); };
+
+  const CONFIRM = {
+    terminate: "Shartnoma bekor qilinadi va ijara tugatiladi. Bu amalni qaytarib bo'lmaydi. Davom etasizmi?",
+    blacklist: "Ijarachi qora ro'yxatga kiritiladi — u yangi bandlov qila olmaydi. Davom etasizmi?",
+  };
+
+  const submit = async () => {
+    if (!canSubmit || busy) return;
+    if (CONFIRM[kind] && !window.confirm(CONFIRM[kind])) return;
+    setErr(null); setBusy(true);
+    const data = {};
+    for (const x of fields) {
+      const v = f[x.k];
+      if (v === '' || v === undefined || v === null) continue;
+      data[x.k] = x.type === 'money' ? Number(v) : typeof v === 'string' ? v.trim() : v;
+    }
+    // "Today" means now, so the step lands after whatever the engine did this
+    // morning; a back-dated step is pinned to that day's (local) midnight.
+    const day = hasOwnAt ? f.at : at;
+    const atIso = day === isoToday() ? new Date().toISOString() : localMidnight(day);
+    try {
+      await api.post(`/collection/${encodeURIComponent(caseId)}/steps`, {
+        kind, at: atIso,
+        ...(summary.trim() ? { summary: summary.trim() } : {}),
+        data,
+      });
+      onDone();
+    } catch (e) {
+      setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
+      setBusy(false);
+    }
+  };
+
+  const input = (x) => {
+    const v = f[x.k] ?? '';
+    if (x.type === 'date') return <DateField value={v} onChange={(val) => set(x.k, val)} min={kind === 'pause' && x.k === 'until' ? isoToday(1) : undefined} />;
+    if (x.type === 'money') return <input className="adm-input" type="number" min={0} step={1} value={v} onChange={(e) => set(x.k, e.target.value)} placeholder="5000000" style={{ width: '100%' }} />;
+    if (x.type === 'enum') return (
+      <select className="adm-select" style={{ width: '100%' }} value={v} onChange={(e) => set(x.k, e.target.value)}>
+        <option value="">— tanlang —</option>
+        {(x.options || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    );
+    if (x.type === 'textarea') return <textarea className="adm-input" rows={2} value={v} onChange={(e) => set(x.k, e.target.value)} style={{ width: '100%', resize: 'vertical', font: `400 13px ${window.GO.font}` }} />;
+    return <input className="adm-input" value={v} onChange={(e) => set(x.k, e.target.value)} style={{ width: '100%' }} />;
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        {!hasOwnAt && (
+          <div>
+            <Label>Sana</Label>
+            <DateField value={at} onChange={setAt} />
+          </div>
+        )}
+        {fields.map((x) => (
+          <div key={x.k} style={x.type === 'textarea' ? { gridColumn: '1 / -1' } : undefined}>
+            <Label>{x.label}{x.required ? ' *' : ''}</Label>
+            {input(x)}
+          </div>
+        ))}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <Label>Qisqacha xulosa</Label>
+          <input className="adm-input" value={summary} onChange={(e) => setSummary(e.target.value)}
+            placeholder="Tarixda bir qatorda ko'rinadi" style={{ width: '100%' }} />
+        </div>
+      </div>
+
+      {(err || problem) && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 8 }}>{err || problem}</div>}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <Btn kind="quiet" sm onClick={onCancel}>Bekor qilish</Btn>
+        <Btn kind={CONFIRM[kind] ? 'danger' : 'primary'} sm onClick={submit} disabled={!canSubmit || busy}>
+          {busy ? 'Saqlanmoqda…' : CASE_STEP[kind] || 'Saqlash'}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+// ─── The case, inside the debtor drawer ─────────────────────
+// Where the case stands, what is next, and the steps allowed from here. The
+// server says which steps are allowed (`allowed`); this only draws buttons.
+function CollectionCaseCard({ row, onChanged, onCase, version }) {
+  const [c, setC] = React.useState(undefined); // undefined: loading, null: no case
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [step, setStep] = React.useState(null); // step kind → modal
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
+  const canCollect = api.can('collect');
+  // The drawer wants the case id for the timeline; keep the callback out of
+  // the effect's dependencies so a re-render never refetches.
+  const onCaseRef = React.useRef(onCase);
+  onCaseRef.current = onCase;
+
+  // Only the latest request may land: a slow answer for the previous debtor
+  // must not overwrite this one's card (or the drawer's caseId) after the
+  // operator has moved on.
+  const reqRef = React.useRef(0);
+  React.useEffect(() => () => { reqRef.current++; }, []);
+  const load = React.useCallback(() => {
+    setErr(null);
+    const id = ++reqRef.current;
+    api.get(`/collection/by-booking/${encodeURIComponent(row.bookingId)}`)
+      .then((v) => { if (id !== reqRef.current) return; setC(v || null); if (onCaseRef.current) onCaseRef.current(v || null); })
+      .catch((e) => { if (id !== reqRef.current) return; setC(null); setErr(e && e.message ? e.message : "Yuklab bo'lmadi"); });
+  }, [row.bookingId, version]);
+  React.useEffect(() => { load(); }, [load]);
+
+  const changed = () => { load(); if (onChanged) onChanged(); };
+
+  const openCase = async () => {
+    setBusy(true); setErr(null);
+    try { await api.post('/collection', { bookingId: row.bookingId }); changed(); }
+    catch (e) { setErr(e && e.message ? e.message : 'Xatolik yuz berdi'); }
+    finally { setBusy(false); }
+  };
+
+  const muted = { font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' };
+  const title = <div style={{ font: `700 14px ${window.GO.font}`, color: 'var(--g-ink)' }}>Undiruv</div>;
+
+  if (c === undefined) return <Card pad={16} style={{ marginBottom: 16 }}>{title}<div style={{ ...muted, marginTop: 6 }}>Yuklanmoqda…</div></Card>;
+
+  if (!c) {
+    return (
+      <Card pad={16} style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            {title}
+            <div style={{ ...muted, marginTop: 4 }}>Undiruv ishi ochilmagan</div>
+          </div>
+          {canCollect && row.outstanding > 0 && (
+            <Btn kind="primary" sm onClick={openCase} disabled={busy}>{busy ? 'Ochilmoqda…' : 'Ish ochish'}</Btn>
+          )}
+        </div>
+        {err && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>{err}</div>}
+      </Card>
+    );
+  }
+
+  const daysSince = (iso) => (iso ? Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)) : 0);
+  const late = caseActionLate(c);
+  // Reopening and the blacklist are platform-only on the server too.
+  const allowed = (c.allowed || []).filter((k) => !['reopen', 'blacklist'].includes(k) || isPlatform);
+  const forward = CASE_FORWARD[c.stage];
+  const btnKind = (k) => (k === forward ? 'primary' : ['terminate', 'blacklist', 'close'].includes(k) ? 'danger' : 'ghost');
+  // Forward step first, the dangerous ones last.
+  const order = (k) => (k === forward ? 0 : btnKind(k) === 'danger' ? 2 : 1);
+  const buttons = [...allowed].sort((a, b) => order(a) - order(b));
+
+  return (
+    <Card pad={16} style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+        {title}
+        <CaseStagePill c={c} />
+        <span style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', fontFamily: 'ui-monospace, monospace' }}>{c.number}</span>
+        <span style={muted}>ochilgan {fmtDate(c.openedAt)}{c.openedBy ? ` · ${c.openedBy}` : ''}</span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginTop: 14 }}>
+        <MiniStat label="Bosqichdan beri" value={String(daysSince(c.stageSince))} unit="kun" />
+        <div>
+          <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Keyingi ish</div>
+          <div style={{ font: `600 13px ${window.GO.font}`, color: late ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)', marginTop: 5 }}>
+            {c.nextActionLabel || '—'}
+          </div>
+          {c.nextActionAt && (
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: late ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-4)', marginTop: 1 }}>
+              {fmtDate(c.nextActionAt)}{late ? " — muddati o'tgan" : ''}
+            </div>
+          )}
+        </div>
+        <MiniStat
+          label={c.claimedAmount != null ? 'Talab qilingan' : 'Ochilganda'}
+          value={window.fmtCompactSom(c.claimedAmount != null ? c.claimedAmount : (c.outstandingAtOpen || 0))}
+        />
+      </div>
+
+      {c.status === 'paused' && (
+        <div style={{
+          marginTop: 12, padding: '9px 12px', borderRadius: 10,
+          background: 'color-mix(in oklch, oklch(0.6 0.1 200) 12%, transparent)',
+          font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)',
+        }}>
+          To'xtatilgan {fmtDate(c.pausedUntil)} gacha{c.pauseReason ? ` · ${(((STEP_FIELDS.pause.find((x) => x.k === 'reason') || {}).options || []).find((o) => o.value === c.pauseReason) || {}).label || c.pauseReason}` : ''}
+        </div>
+      )}
+      {c.status === 'closed' && (
+        <div style={{
+          marginTop: 12, padding: '9px 12px', borderRadius: 10,
+          background: 'color-mix(in oklch, oklch(0.6 0.14 155) 12%, transparent)',
+          font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)',
+        }}>
+          Yopilgan {fmtDate(c.closedAt)}{c.closeReason ? ` · ${CASE_CLOSE[c.closeReason] || c.closeReason}` : ''}{c.closedBy ? ` · ${c.closedBy}` : ''}
+        </div>
+      )}
+
+      {canCollect && buttons.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+          {buttons.map((k) => (
+            <Btn key={k} kind={btnKind(k)} sm onClick={() => setStep(k)}>{CASE_STEP[k] || k}</Btn>
+          ))}
+        </div>
+      )}
+      {err && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>{err}</div>}
+
+      <GoModal open={!!step} onClose={() => setStep(null)} title={step ? `${CASE_STEP[step] || step} · ${c.number}` : ''} width={520}>
+        {step && (
+          <CaseStepForm
+            caseId={c.id}
+            kind={step}
+            onCancel={() => setStep(null)}
+            onDone={() => { setStep(null); changed(); }}
+          />
+        )}
+      </GoModal>
+    </Card>
   );
 }
 
 // ─── Debtor row → drawer ────────────────────────────────────
 function DebtDetailDrawer({ row, onClose, onPay }) {
   const open = !!row;
+  // The case card loads the case; the timeline below needs its id, and
+  // reloads (`version`) after every recorded step.
+  const [caseId, setCaseId] = React.useState(null);
+  const [version, setVersion] = React.useState(0);
+  // A note can change the case headline (a promise pauses the reminders), so
+  // the card reloads after one, the way the timeline reloads after a step.
+  const [noteVersion, setNoteVersion] = React.useState(0);
+  React.useEffect(() => { setCaseId(null); }, [row && row.bookingId]);
   return (
     <Drawer open={open} onClose={onClose} width={620}>
       {row && (
@@ -6252,6 +6801,14 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
               </div>
             </Card>
 
+            <CollectionCaseCard
+              key={row.bookingId}
+              row={row}
+              version={noteVersion}
+              onCase={(c) => setCaseId(c ? c.id : null)}
+              onChanged={() => { setVersion((v) => v + 1); if (window.__gorentRefresh) window.__gorentRefresh(); }}
+            />
+
             <Card pad={16}>
               {/* No hostId on a debtors row (it carries the building's NAME,
                   not its owner), so a broker is judged on the union of their
@@ -6259,7 +6816,9 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
               <DebtNotesPanel
                 bookingId={row.bookingId}
                 companyId={row.company?.id || null}
-                onChanged={() => { if (window.__gorentRefresh) window.__gorentRefresh(); }}
+                caseId={caseId}
+                version={version}
+                onChanged={() => { setNoteVersion((v) => v + 1); if (window.__gorentRefresh) window.__gorentRefresh(); }}
               />
             </Card>
           </div>
@@ -7336,13 +7895,25 @@ function DebtorsScreen({ search }) {
   // Reminders are platform-only (they expose every host's tenants).
   const isPlatform = (api.currentUser() || {}).role === 'platform';
   const former = tab === 'former';
+  // Where each debt stands in the collection ladder — 'all', 'none' (no
+  // live case), a CASE_STAGE key, or 'paused'.
+  const [stageFilter, setStageFilter] = React.useState('all');
 
   const applySearch = (list) => {
     if (!search) return list;
     const q = search.toLowerCase();
     return list.filter((r) => `${r.customer} ${r.company?.name || ''} ${r.building} ${r.unit}`.toLowerCase().includes(q));
   };
-  const rows = applySearch((data.rows || []).filter((r) => (r.group === 'former') === former));
+  const caseKey = (r) => (!r.case || r.case.status === 'closed' ? 'none' : r.case.status === 'paused' ? 'paused' : r.case.stage);
+  const tabRows = applySearch((data.rows || []).filter((r) => (r.group === 'former') === former));
+  const rows = stageFilter === 'all' ? tabRows : tabRows.filter((r) => caseKey(r) === stageFilter);
+  const stageCounts = tabRows.reduce((acc, r) => { const k = caseKey(r); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
+  const stageOptions = [
+    { k: 'all', label: 'Barchasi' },
+    { k: 'none', label: 'Ishsiz' },
+    ...Object.entries(CASE_STAGE).map(([k, v]) => ({ k, label: v.label, hue: v.hue })),
+    { k: 'paused', label: CASE_STATUS.paused.label, hue: CASE_STATUS.paused.hue },
+  ];
   // Tenants in credit — the other side of the same book, on their own tab so
   // the debtors table stays a list of people to chase.
   const prepaidRows = applySearch(data.prepaid || []);
@@ -7388,6 +7959,8 @@ function DebtorsScreen({ search }) {
         )}
       </div>
     ) },
+    // Where the collection case stands and what the operator does next.
+    { key: 'stage', label: 'Undiruv', render: (r) => <CaseCell c={r.case} /> },
     // How long the money has been owed, counted from the invoice date. Shown
     // only for former tenants: it is the figure a claim is built on.
     ...(former ? [{ key: 'overdue', label: 'Kechikish', align: 'right', render: (r) => (
@@ -7510,6 +8083,12 @@ function DebtorsScreen({ search }) {
           : <MoneyStatCard icon={<IconDoc size={17} />} label="Joriy oy hisoblanmoqda" value={window.fmtCompactSom(totals.accruing || 0)} />}
         <MoneyStatCard icon={<IconWallet size={17} />} label="Oldindan to'lovlar" value={window.fmtCompactSom(totals.prepaid)} color="oklch(0.5 0.13 155)" />
       </div>
+      {totals.casesOpen !== undefined && (
+        <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', margin: '-6px 0 14px' }}>
+          Undiruv: <b style={{ color: 'var(--g-ink)' }}>{totals.casesOpen || 0}</b> ochiq ish
+          {' · '}<b style={{ color: totals.caseActionsDue > 0 ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)' }}>{totals.caseActionsDue || 0}</b> ta bugun
+        </div>
+      )}
 
       {former ? (
         <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', margin: '-4px 0 14px' }}>
@@ -7525,8 +8104,27 @@ function DebtorsScreen({ search }) {
         </>
       )}
 
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 14 }}>
+        {stageOptions.map((o) => {
+          const active = stageFilter === o.k;
+          const count = o.k === 'all' ? tabRows.length : (stageCounts[o.k] || 0);
+          return (
+            <button key={o.k} onClick={() => setStageFilter(o.k)} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
+              border: '1px solid', borderColor: active ? 'var(--g-ink)' : 'var(--g-line)',
+              background: active ? 'var(--g-ink)' : 'var(--g-card)', color: active ? '#fff' : 'var(--g-ink-2)',
+              font: `600 12px ${window.GO.font}`, transition: 'all .14s',
+            }}>
+              {o.hue !== undefined && <span style={{ width: 7, height: 7, borderRadius: 999, background: active ? '#fff' : `oklch(0.6 0.16 ${o.hue})` }} />}
+              {o.label}
+              <span style={{ opacity: 0.6, font: `600 11px ${window.GO.font}` }}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} onRow={setDetail}
-        empty={former ? "Sobiq ijarachilarda qarz yo'q 🎉" : "Qarzdorlik yo'q 🎉"} />
+        empty={stageFilter !== 'all' ? "Bu bosqichda qarzdor yo'q" : former ? "Sobiq ijarachilarda qarz yo'q 🎉" : "Qarzdorlik yo'q 🎉"} />
       </>
       )}
 
@@ -8688,6 +9286,34 @@ function PlatformTab() {
   const [daysText, setDaysText] = React.useState((initN.paymentReminderDays ?? [3, 7, 14]).join(', '));
   const parsedDays = daysText.split(',').map((x) => parseInt(x.trim(), 10)).filter((x) => Number.isFinite(x) && x >= 0);
   const daysValid = parsedDays.length > 0;
+  // Undiruv — how far the engine climbs on its own, and when.
+  const initC = (window.SETTINGS && window.SETTINGS.collection) || {};
+  const [col, setCol] = React.useState({
+    autoOpen: initC.autoOpen ?? true,
+    warningAfterDays: initC.warningAfterDays ?? 14,
+    claimAfterDays: initC.claimAfterDays ?? 30,
+    claimResponseDays: initC.claimResponseDays ?? 15,
+    minAmount: initC.minAmount ?? 500000,
+    callTaskDays: initC.callTaskDays ?? 1,
+  });
+  const setC1 = (k, v) => setCol((p) => ({ ...p, [k]: v }));
+  const colNum = (k) => Number(col[k]);
+  const colDayOk = (k) => Number.isInteger(colNum(k)) && colNum(k) >= 1 && colNum(k) <= 365;
+  const colOrderOk = colNum('claimAfterDays') > colNum('warningAfterDays');
+  const colValid = ['warningAfterDays', 'claimAfterDays', 'claimResponseDays', 'callTaskDays'].every(colDayOk)
+    && Number.isFinite(colNum('minAmount')) && colNum('minAmount') >= 0 && colOrderOk;
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
+  const [sweepBusy, setSweepBusy] = React.useState(false);
+  const [sweepNote, setSweepNote] = React.useState(null);
+  const sweepNow = async () => {
+    setSweepBusy(true); setSweepNote(null);
+    try {
+      const r = await api.post('/collection/sweep', {});
+      setSweepNote(`${r.debtors ?? 0} qarzdor tekshirildi · ${r.opened ?? 0} ochildi · ${r.advanced ?? 0} keyingi bosqichga · ${r.resumed ?? 0} davom ettirildi · ${r.closed ?? 0} yopildi · ${r.skipped ?? 0} o'tkazib yuborildi`);
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+    } catch (e) { setSweepNote(e?.message || 'Ishga tushmadi'); }
+    setSweepBusy(false);
+  };
   const save = () => gorentMutate(() => api.put('/settings', {
     platform: s,
     company: {
@@ -8697,6 +9323,14 @@ function PlatformTab() {
       origin: Number(co.origin) || 5,
     },
     notifications: { ...n, paymentReminderDays: daysValid ? [...new Set(parsedDays)].sort((a, b) => a - b) : n.paymentReminderDays },
+    collection: {
+      autoOpen: !!col.autoOpen,
+      warningAfterDays: Number(col.warningAfterDays),
+      claimAfterDays: Number(col.claimAfterDays),
+      claimResponseDays: Number(col.claimResponseDays),
+      minAmount: Number(col.minAmount),
+      callTaskDays: Number(col.callTaskDays),
+    },
   }));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -8912,8 +9546,63 @@ function PlatformTab() {
             <b>Qarzdorlik → Eslatmalar</b> bo'limida kimga yuborilishini tekshiring.
           </div>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-          <Btn kind="primary" onClick={save} disabled={!daysValid}>O'zgarishlarni saqlash</Btn>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16, alignItems: 'center' }}>
+          {!colValid && (
+            <span style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+              Undiruv sozlamalarida xato bor (pastda)
+            </span>
+          )}
+          <Btn kind="primary" onClick={save} disabled={!daysValid || !colValid}>O'zgarishlarni saqlash</Btn>
+        </div>
+      </Card>
+
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconFlag size={16} /></span>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Undiruv</div>
+        </div>
+        <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', margin: '4px 0 2px', maxWidth: 620 }}>
+          Pretenziya yuborish, talabnoma, sud va MIB qadamlari faqat operator tomonidan kiritiladi. Har kuni 10:30 da tekshiriladi.
+        </div>
+        <Row title="Ishlarni avtomatik ochish" sub="Muddati o'tgan qarz uchun undiruv ishi o'zi ochiladi va eslatmadan ogohlantirishgacha o'zi ko'tariladi.">
+          <Toggle on={col.autoOpen} onClick={() => setC1('autoOpen', !col.autoOpen)} />
+        </Row>
+        {[
+          { k: 'warningAfterDays', title: 'Ogohlantirish (kechikish, kun)', sub: 'Shuncha kun kechikkanda ish ogohlantirish bosqichiga o\'tadi.' },
+          { k: 'claimAfterDays', title: 'Pretenziya loyihasi (kun)', sub: 'Shuncha kun kechikkanda pretenziya loyihasi topshirig\'i beriladi. Ogohlantirishdan katta bo\'lishi kerak.' },
+          { k: 'claimResponseDays', title: 'Pretenziyaga javob muddati (kun)', sub: 'Pretenziya yuborilgach javob kutiladigan muddat.' },
+          { k: 'minAmount', title: "Eng kam qarz (so'm)", sub: 'Bundan kichik qarz uchun ish ochilmaydi.', money: true },
+          { k: 'callTaskDays', title: "Qo'ng'iroq topshirig'i (kun)", sub: 'Ish ochilgach shuncha kun ichida qo\'ng\'iroq qilish topshirig\'i beriladi.' },
+        ].map((r, i, arr) => {
+          const bad = r.money ? !(Number.isFinite(colNum(r.k)) && colNum(r.k) >= 0) : (!colDayOk(r.k) || (r.k === 'claimAfterDays' && !colOrderOk));
+          return (
+            <Row key={r.k} title={r.title} sub={r.sub} last={i === arr.length - 1}>
+              <input
+                className="adm-input"
+                type="number"
+                min={r.money ? 0 : 1}
+                max={r.money ? undefined : 365}
+                step={1}
+                value={col[r.k]}
+                onChange={(e) => setC1(r.k, e.target.value)}
+                style={{ width: r.money ? 150 : 100, textAlign: 'right', ...(bad ? { borderColor: 'oklch(0.6 0.16 25)' } : {}) }}
+              />
+            </Row>
+          );
+        })}
+        {!colValid && (
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>
+            {!colOrderOk
+              ? 'Pretenziya loyihasi kuni ogohlantirish kunidan katta bo\'lishi kerak.'
+              : "Kun maydonlari 1 dan 365 gacha butun son, eng kam qarz 0 dan kichik bo'lmasligi kerak."}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {isPlatform && <Btn kind="ghost" onClick={sweepNow} disabled={sweepBusy}><IconRefresh size={14} /> {sweepBusy ? 'Tekshirilmoqda…' : 'Hozir tekshirish'}</Btn>}
+            {sweepNote && <span style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{sweepNote}</span>}
+          </div>
+          <Btn kind="primary" onClick={save} disabled={!daysValid || !colValid}>O'zgarishlarni saqlash</Btn>
         </div>
       </Card>
 
