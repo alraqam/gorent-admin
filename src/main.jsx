@@ -4318,12 +4318,14 @@ function BuildingForm({ building, role, onClose, onCreated }) {
     name: building.name, address: building.address || '', city: building.city || 'Toshkent',
     district: building.district || window.DISTRICTS_TASHKENT[0], ownerName: building.ownerName || '',
     ownerInn: building.ownerInn || '', ownerPhone: building.ownerPhone || '',
+    ownerBankAccount: building.ownerBankAccount || '', ownerBankMfo: building.ownerBankMfo || '', ownerBankName: building.ownerBankName || '',
     kadastrNumber: building.kadastrNumber || '', status: building.status || 'draft',
     totalM2: building.totalM2 ?? '', floors: building.floors ?? '', facilities: building.facilities || [],
     marketplace: !!building.marketplace,
   } : {
     name: '', address: '', city: 'Toshkent', district: window.DISTRICTS_TASHKENT[0],
     ownerName: '', ownerInn: '', ownerPhone: '', kadastrNumber: '', status: 'draft',
+    ownerBankAccount: '', ownerBankMfo: '', ownerBankName: '',
     totalM2: '', floors: '', facilities: [],
     marketplace: false, // default: private SaaS usage
   });
@@ -4354,6 +4356,9 @@ function BuildingForm({ building, role, onClose, onCreated }) {
         ownerName: f.ownerName.trim(),
         ownerInn: f.ownerInn.trim() || null,
         ownerPhone: f.ownerPhone.trim() || null,
+        ownerBankAccount: f.ownerBankAccount.trim() || null,
+        ownerBankMfo: f.ownerBankMfo.trim() || null,
+        ownerBankName: f.ownerBankName.trim() || null,
         kadastrNumber: f.kadastrNumber.trim() || null,
         totalM2: f.totalM2 === '' ? null : Number(f.totalM2),
         floors: f.floors === '' ? null : Number(f.floors),
@@ -4501,6 +4506,21 @@ function BuildingForm({ building, role, onClose, onCreated }) {
               <Label>Telefon raqami</Label>
               <input className="adm-input" value={f.ownerPhone} onChange={(e) => set('ownerPhone', e.target.value)} placeholder="+998901234567" />
             </div>
+            <div>
+              <Label>Bank hisob raqami</Label>
+              <input className="adm-input" value={f.ownerBankAccount} onChange={(e) => set('ownerBankAccount', e.target.value.replace(/\D/g, '').slice(0, 20))} placeholder="20208000000000000001" />
+            </div>
+            <div>
+              <Label>MFO</Label>
+              <input className="adm-input" value={f.ownerBankMfo} onChange={(e) => set('ownerBankMfo', e.target.value.replace(/\D/g, '').slice(0, 5))} placeholder="00014" />
+            </div>
+            <div>
+              <Label>Bank nomi</Label>
+              <input className="adm-input" value={f.ownerBankName} onChange={(e) => set('ownerBankName', e.target.value.slice(0, 120))} placeholder="Kapitalbank ATB" />
+            </div>
+          </div>
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 10 }}>
+            Pretenziya va to'lov talabnomasida to'lov rekvizitlari sifatida chiqadi.
           </div>
         </Card>
 
@@ -6135,6 +6155,64 @@ function stepValueLabel(field, v) {
   return String(v);
 }
 
+// ─── Case documents and evidence files ──────────────────────
+const CASE_FILE_KIND = {
+  pretenziya:     { label: 'Pretenziya', hue: 25 },
+  delivery_proof: { label: 'Topshirilganlik dalili', hue: 40 },
+  demand:         { label: 'Talabnoma', hue: 300 },
+  court_filing:   { label: 'Sud hujjati', hue: 340 },
+  court_decision: { label: 'Sud qarori', hue: 340 },
+  writ:           { label: 'Ijro varaqasi', hue: 10 },
+  enforcement:    { label: 'MIB hujjati', hue: 10 },
+  agreement:      { label: 'Kelishuv', hue: 155 },
+  other:          { label: 'Boshqa', hue: 200 },
+};
+
+// Which file kind a step's evidence is filed under. A step kind missing here
+// has no file input (pause, resume, reopen, warning, claim_draft).
+const STEP_FILE_KIND = {
+  claim: 'pretenziya', claim_response: 'delivery_proof',
+  demand: 'demand', demand_update: 'demand',
+  court: 'court_filing', court_hearing: 'court_filing', court_decision: 'court_decision',
+  enforcement: 'enforcement', enforcement_update: 'enforcement',
+  close: 'other', terminate: 'other', blacklist: 'other',
+};
+// A settlement's paperwork is the agreement itself; any other close is "other".
+const stepFileKind = (kind, data) => (kind === 'close' && data.reason === 'settled' ? 'agreement' : STEP_FILE_KIND[kind]);
+
+const CASE_FILE_MAX = 10 * 1024 * 1024;
+const fmtBytes = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`);
+
+// Auth-gated case document or file → new tab, the openContractDocument way:
+// the tab is opened inside the click so it isn't popup-blocked, then pointed
+// at the blob. Failures go to `onErr` — the demand letter 400s before its step.
+async function openCasePath(path, onErr) {
+  const w = window.open('', '_blank');
+  try {
+    const url = await api.fileBlobUrl(path);
+    if (w) w.location = url; else window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (e) {
+    if (w) w.close();
+    onErr(e && e.message ? e.message : "Hujjatni ochib bo'lmadi");
+  }
+}
+
+// An attached file's name, opening it in a new tab.
+function CaseFileLink({ caseId, f, onErr, style }) {
+  return (
+    <a
+      href="#"
+      title={f.originalName}
+      onClick={(e) => { e.preventDefault(); openCasePath(`/collection/${encodeURIComponent(caseId)}/files/${encodeURIComponent(f.id)}`, onErr); }}
+      style={{
+        font: `500 12.5px ${window.GO.font}`, color: 'var(--g-brand)', textDecoration: 'none',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, ...style,
+      }}
+    >{f.originalName}</a>
+  );
+}
+
 const toneOf = (hue) => ({
   color: `oklch(0.44 0.15 ${hue})`,
   background: `color-mix(in oklch, oklch(0.6 0.16 ${hue}) 14%, transparent)`,
@@ -6369,10 +6447,12 @@ function DebtNoteItem({ n, onChanged }) {
 }
 
 // ─── One recorded step in the case timeline ─────────────────
-function CaseStepItem({ s }) {
+function CaseStepItem({ s, caseId, files }) {
+  const [fileErr, setFileErr] = React.useState(null);
   const hue = (CASE_STAGE[s.toStage] || {}).hue ?? 200;
   const fields = STEP_FIELDS[s.kind] || [];
   const data = s.data || {};
+  const attached = (files || []).filter((f) => f.stepId && s.id && f.stepId === s.id);
   const shown = fields
     .filter((x) => x.k !== 'note' && data[x.k] !== undefined && data[x.k] !== null && data[x.k] !== '')
     .slice(0, 4);
@@ -6398,6 +6478,13 @@ function CaseStepItem({ s }) {
           </div>
         )}
         {data.note && <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', whiteSpace: 'pre-wrap', marginTop: 4 }}>{data.note}</div>}
+        {attached.length > 0 && (
+          <div style={{ display: 'flex', gap: '2px 10px', flexWrap: 'wrap', alignItems: 'center', marginTop: 4, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            <span>Hujjat:</span>
+            {attached.map((f) => <CaseFileLink key={f.id} caseId={caseId} f={f} onErr={setFileErr} />)}
+          </div>
+        )}
+        {fileErr && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 3 }}>{fileErr}</div>}
         <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 5 }}>
           {fmtDate(s.at)} · {s.authorEmail || (s.authorRole === 'system' ? 'tizim' : '—')}
         </div>
@@ -6437,6 +6524,7 @@ function CaseMessageItem({ m }) {
 // `version` is bumped by the case card after a step so the list reloads.
 function DebtNotesPanel({ bookingId, companyId, onChanged, hostId, caseId, version }) {
   const [notes, setNotes] = React.useState(null);
+  const [files, setFiles] = React.useState([]); // case mode: evidence, matched to steps by stepId
   const [scope, setScope] = React.useState('booking');
   const [adding, setAdding] = React.useState(false);
 
@@ -6448,10 +6536,10 @@ function DebtNotesPanel({ bookingId, companyId, onChanged, hostId, caseId, versi
   const load = React.useCallback(() => {
     setNotes(null);
     const id = ++reqRef.current;
-    const settle = (rows) => { if (id === reqRef.current) setNotes(rows); };
+    const settle = (rows, fl) => { if (id === reqRef.current) { setNotes(rows); setFiles(fl || []); } };
     if (caseId) {
       api.get(`/collection/${encodeURIComponent(caseId)}`)
-        .then((c) => settle((c && c.timeline) || [])).catch(() => settle([]));
+        .then((c) => settle((c && c.timeline) || [], c && c.files)).catch(() => settle([]));
       return;
     }
     api.get(`/debt-notes?booking=${encodeURIComponent(bookingId)}&scope=${scope}`)
@@ -6499,7 +6587,7 @@ function DebtNotesPanel({ bookingId, companyId, onChanged, hostId, caseId, versi
               // Plain notes list (no case) — rows are DebtNoteViews as before.
               if (!caseId) return <DebtNoteItem key={it.id} n={it} onChanged={changed} />;
               if (it.type === 'note') return <DebtNoteItem key={`n-${it.note.id}`} n={it.note} onChanged={changed} />;
-              if (it.type === 'step') return <CaseStepItem key={`s-${it.id || i}`} s={it} />;
+              if (it.type === 'step') return <CaseStepItem key={`s-${it.id || i}`} s={it} caseId={caseId} files={files} />;
               if (it.type === 'message') return <CaseMessageItem key={`m-${it.id || i}`} m={it} />;
               return null;
             })}</div>}
@@ -6510,13 +6598,23 @@ function DebtNotesPanel({ bookingId, companyId, onChanged, hostId, caseId, versi
 // ─── Record one step on a case ──────────────────────────────
 // One form for every step kind, drawn from STEP_FIELDS. The API validates
 // again; the required check here only saves the round trip.
-function CaseStepForm({ caseId, kind, onDone, onCancel }) {
+//
+// `company` is the tenant's company row: a demand form starts from the bank
+// details remembered off the last demand, so they are typed once per tenant.
+function CaseStepForm({ caseId, kind, company, onDone, onCancel }) {
   const fields = STEP_FIELDS[kind] || [];
-  const [f, setF] = React.useState(() => Object.fromEntries(fields.map((x) => [x.k, ''])));
+  const remembered = kind === 'demand' ? (((company && company.bankDetails) || [])[0] || null) : null;
+  const [f, setF] = React.useState(() => ({
+    ...Object.fromEntries(fields.map((x) => [x.k, ''])),
+    ...(remembered ? { bank: remembered.bank || '', mfo: remembered.mfo || '', account: remembered.account || '' } : {}),
+  }));
   const [at, setAt] = React.useState(isoToday());
   const [summary, setSummary] = React.useState('');
+  const [file, setFile] = React.useState(null);
   const [err, setErr] = React.useState(null);
+  const [warn, setWarn] = React.useState(null); // step recorded, file not
   const [busy, setBusy] = React.useState(false);
+  const fileKind = STEP_FILE_KIND[kind];
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const Label = ({ children }) => <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>{children}</div>;
 
@@ -6528,7 +6626,8 @@ function CaseStepForm({ caseId, kind, onDone, onCancel }) {
   const badMoney = fields.filter((x) => x.type === 'money' && String(f[x.k] ?? '').trim() !== '' && !Number.isInteger(Number(f[x.k])));
   const pastPause = kind === 'pause' && !!f.until && f.until < isoToday(1);
   const problem = badMoney.length ? `${badMoney[0].label}: butun son bo'lishi kerak`
-    : pastPause ? "To'xtatish sanasi ertadan boshlab bo'lishi kerak" : null;
+    : pastPause ? "To'xtatish sanasi ertadan boshlab bo'lishi kerak"
+    : file && file.size > CASE_FILE_MAX ? 'Fayl 10 MB dan katta' : null;
   const canSubmit = missing.length === 0 && !problem && (hasOwnAt || !!at);
   // A day chosen on the form means that day's local midnight.
   const localMidnight = (d) => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).toISOString(); };
@@ -6552,18 +6651,46 @@ function CaseStepForm({ caseId, kind, onDone, onCancel }) {
     // morning; a back-dated step is pinned to that day's (local) midnight.
     const day = hasOwnAt ? f.at : at;
     const atIso = day === isoToday() ? new Date().toISOString() : localMidnight(day);
+    let res;
     try {
-      await api.post(`/collection/${encodeURIComponent(caseId)}/steps`, {
+      res = await api.post(`/collection/${encodeURIComponent(caseId)}/steps`, {
         kind, at: atIso,
         ...(summary.trim() ? { summary: summary.trim() } : {}),
         data,
       });
-      onDone();
     } catch (e) {
       setErr(e && e.message ? e.message : 'Xatolik yuz berdi');
       setBusy(false);
+      return;
     }
+    // The evidence rides after the step, tied to it by the returned stepId.
+    // A failed upload does not undo the step: it is on the record, only the
+    // file is missing — so the form says so and stays until it is read.
+    if (file && fileKind) {
+      try {
+        await api.upload(`/collection/${encodeURIComponent(caseId)}/files`, file, {
+          kind: stepFileKind(kind, data),
+          stepId: res && res.stepId ? res.stepId : undefined,
+        });
+      } catch (e) {
+        setWarn(`Qadam saqlandi, lekin fayl yuklanmadi: ${e && e.message ? e.message : 'xatolik'}`);
+        setBusy(false);
+        return;
+      }
+    }
+    onDone();
   };
+
+  if (warn) {
+    return (
+      <div>
+        <div style={{ font: `500 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 12 }}>{warn}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Btn kind="primary" sm onClick={onDone}>Yopish</Btn>
+        </div>
+      </div>
+    );
+  }
 
   const input = (x) => {
     const v = f[x.k] ?? '';
@@ -6582,6 +6709,11 @@ function CaseStepForm({ caseId, kind, onDone, onCancel }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        {remembered && (
+          <div style={{ gridColumn: '1 / -1', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            Bank rekvizitlari: oldingi talabnomadan olindi{remembered.seenAt ? ` (${fmtDate(remembered.seenAt)})` : ''}
+          </div>
+        )}
         {!hasOwnAt && (
           <div>
             <Label>Sana</Label>
@@ -6599,6 +6731,13 @@ function CaseStepForm({ caseId, kind, onDone, onCancel }) {
           <input className="adm-input" value={summary} onChange={(e) => setSummary(e.target.value)}
             placeholder="Tarixda bir qatorda ko'rinadi" style={{ width: '100%' }} />
         </div>
+        {fileKind && (
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Label>Hujjat (PDF/rasm, ≤10MB)</Label>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setFile(e.target.files?.[0] || null)}
+              style={{ font: `400 12px ${window.GO.font}`, width: '100%' }} />
+          </div>
+        )}
       </div>
 
       {(err || problem) && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 8 }}>{err || problem}</div>}
@@ -6621,8 +6760,14 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [step, setStep] = React.useState(null); // step kind → modal
+  const [files, setFiles] = React.useState([]); // evidence on the case, newest first
+  const [docErr, setDocErr] = React.useState(null); // a letter that would not open
+  const [fileErr, setFileErr] = React.useState(null); // a file that would not open/delete
   const isPlatform = (api.currentUser() || {}).role === 'platform';
   const canCollect = api.can('collect');
+  // The tenant's company row carries the bank details remembered off the
+  // last demand; the demand form starts from them.
+  const company = (window.COMPANIES || []).find((x) => x.id === (row.company || {}).id) || null;
   // The drawer wants the case id for the timeline; keep the callback out of
   // the effect's dependencies so a re-render never refetches.
   const onCaseRef = React.useRef(onCase);
@@ -6637,7 +6782,16 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
     setErr(null);
     const id = ++reqRef.current;
     api.get(`/collection/by-booking/${encodeURIComponent(row.bookingId)}`)
-      .then((v) => { if (id !== reqRef.current) return; setC(v || null); if (onCaseRef.current) onCaseRef.current(v || null); })
+      .then((v) => {
+        if (id !== reqRef.current) return;
+        setC(v || null); if (onCaseRef.current) onCaseRef.current(v || null);
+        if (!v) { setFiles([]); return undefined; }
+        // The evidence list lives on the full case view. Same request id, so
+        // a slow answer for the previous debtor cannot file its papers here.
+        return api.get(`/collection/${encodeURIComponent(v.id)}`)
+          .then((full) => { if (id === reqRef.current) setFiles((full && full.files) || []); })
+          .catch(() => { if (id === reqRef.current) setFiles([]); });
+      })
       .catch((e) => { if (id !== reqRef.current) return; setC(null); setErr(e && e.message ? e.message : "Yuklab bo'lmadi"); });
   }, [row.bookingId, version]);
   React.useEffect(() => { load(); }, [load]);
@@ -6682,6 +6836,24 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
   // Forward step first, the dangerous ones last.
   const order = (k) => (k === forward ? 0 : btnKind(k) === 'danger' ? 2 : 1);
   const buttons = [...allowed].sort((a, b) => order(a) - order(b));
+
+  // The letters the case has earned so far. The stage ladder is CASE_STAGE's
+  // key order; a letter stays available once its stage has been reached.
+  const STAGES = Object.keys(CASE_STAGE);
+  const reached = (s) => STAGES.indexOf(c.stage) >= STAGES.indexOf(s);
+  const docs = [
+    reached('warning') && { path: 'warning', label: 'Ogohlantirish xati' },
+    reached('claim_draft') && { path: 'pretenziya', label: c.stage === 'claim_draft' ? 'Pretenziya (loyiha)' : 'Pretenziya' },
+    reached('demand') && { path: 'demand', label: 'Talabnoma' },
+  ].filter(Boolean);
+  const openDoc = (path) => { setDocErr(null); openCasePath(`/collection/${encodeURIComponent(c.id)}/${path}`, setDocErr); };
+
+  const removeFile = async (f) => {
+    if (!window.confirm(`"${f.originalName}" faylini o'chirasizmi?`)) return;
+    setFileErr(null);
+    try { await api.del(`/collection/${encodeURIComponent(c.id)}/files/${encodeURIComponent(f.id)}`); changed(); }
+    catch (e) { setFileErr(e && e.message ? e.message : "O'chirib bo'lmadi"); }
+  };
 
   return (
     <Card pad={16} style={{ marginBottom: 16 }}>
@@ -6730,6 +6902,15 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
         </div>
       )}
 
+      {docs.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+          {docs.map((d) => (
+            <Btn key={d.path} kind="ghost" sm onClick={() => openDoc(d.path)}><IconDoc size={14} /> {d.label}</Btn>
+          ))}
+        </div>
+      )}
+      {docErr && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>{docErr}</div>}
+
       {canCollect && buttons.length > 0 && (
         <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
           {buttons.map((k) => (
@@ -6739,11 +6920,32 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
       )}
       {err && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>{err}</div>}
 
+      {files.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 4 }}>Hujjatlar · {files.length}</div>
+          {files.map((f) => {
+            const k = CASE_FILE_KIND[f.kind] || { label: f.kind, hue: 200 };
+            return (
+              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: '1px solid var(--g-line)', minWidth: 0 }}>
+                <Chip hue={k.hue}>{k.label}</Chip>
+                <CaseFileLink caseId={c.id} f={f} onErr={setFileErr} style={{ flex: 1 }} />
+                <span style={{ ...muted, whiteSpace: 'nowrap' }}>{fmtBytes(f.size)} · {fmtDate(f.uploadedAt)}</span>
+                {isPlatform && (
+                  <Btn kind="quiet" sm onClick={() => removeFile(f)} style={{ padding: '3px 6px', color: 'oklch(0.55 0.16 25)' }}>O'chirish</Btn>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {fileErr && <div style={{ font: `400 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginTop: 8 }}>{fileErr}</div>}
+
       <GoModal open={!!step} onClose={() => setStep(null)} title={step ? `${CASE_STEP[step] || step} · ${c.number}` : ''} width={520}>
         {step && (
           <CaseStepForm
             caseId={c.id}
             kind={step}
+            company={company}
             onCancel={() => setStep(null)}
             onDone={() => { setStep(null); changed(); }}
           />

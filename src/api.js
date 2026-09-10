@@ -102,7 +102,16 @@ async function fileBlobUrl(path) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(BASE + path, { headers });
-  if (!res.ok) throw new ApiError('Faylni yuklab bo‘lmadi', res.status);
+  if (!res.ok) {
+    // The case documents refuse with a reason ("Avval talabnoma qadamini
+    // kiriting"); show that rather than a generic line when the body has it.
+    let msg = 'Faylni yuklab bo‘lmadi';
+    try {
+      const d = JSON.parse(await res.text());
+      if (d && d.message) msg = Array.isArray(d.message) ? d.message.join(', ') : d.message;
+    } catch { /* not JSON — keep the generic line */ }
+    throw new ApiError(msg, res.status);
+  }
   return URL.createObjectURL(await res.blob());
 }
 
