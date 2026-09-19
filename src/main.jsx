@@ -9199,6 +9199,22 @@ const GSM7 =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà';
 const GSM7_EXT = '^{}\\[~]|€';
 
+// Look-alikes swapped as the operator types, so a pasted "—" or an Uzbek "oʻ"
+// never reaches a tenant. Mirrors api/src/common/gsm.ts, which applies the same
+// fold on save and again on every send.
+const GSM_FOLD = {
+  '—': '-', '–': '-', '‒': '-', '―': '-', '−': '-', '‐': '-', '‑': '-',
+  '·': '-', '•': '-',
+  '‘': "'", '’': "'", '‚': "'", 'ʻ': "'", 'ʼ': "'", 'ʹ': "'", '´': "'", '`': "'", '′': "'",
+  '“': '"', '”': '"', '„': '"', '«': '"', '»': '"', '″': '"',
+  '…': '...', '№': 'N',
+  ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', '\t': ' ',
+  '​': '', '‌': '', '‍': '', '⁠': '', '﻿': '',
+};
+const toGsm = (text) => { let out = ''; for (const ch of String(text ?? '')) out += GSM_FOLD[ch] ?? ch; return out; };
+/** Characters still outside the SMS alphabet after folding (Cyrillic, emoji). */
+const nonGsm = (text) => [...new Set([...String(text ?? '')].filter((ch) => GSM7.indexOf(ch) < 0 && GSM7_EXT.indexOf(ch) < 0))];
+
 function smsCost(text) {
   let septets = 0;
   let gsm = true;
@@ -9232,6 +9248,7 @@ function SmsTemplateEditor({ t, text, onChange, onReset }) {
   const allowed = new Set((t.vars || []).map((v) => v.name));
   const used = [...new Set([...String(text).matchAll(TPL_PLACEHOLDER)].map((m) => m[1]))];
   const unknown = used.filter((p) => !allowed.has(p));
+  const bad = nonGsm(text.replace(/[{}]/g, ''));
   const cost = smsCost(text);
   const edited = text !== t.default;
 
@@ -9274,7 +9291,18 @@ function SmsTemplateEditor({ t, text, onChange, onReset }) {
         className="adm-input"
         rows={3}
         value={text}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          // Fold in place, keeping the caret where it was: a pasted "…" grows
+          // to "...", so the caret moves by the length difference.
+          const el = e.target;
+          const raw = el.value;
+          const folded = toGsm(raw);
+          onChange(folded);
+          if (folded !== raw && typeof el.selectionStart === 'number') {
+            const at = toGsm(raw.slice(0, el.selectionStart)).length;
+            requestAnimationFrame(() => el.setSelectionRange(at, at));
+          }
+        }}
         style={{ width: '100%', marginTop: 9, resize: 'vertical', lineHeight: 1.45, fontFamily: window.GO.font }}
       />
 
@@ -9294,9 +9322,13 @@ function SmsTemplateEditor({ t, text, onChange, onReset }) {
         <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
           Noma'lum o'zgaruvchi: {unknown.map((u) => `{${u}}`).join(', ')} — mijozga shu holicha yuboriladi.
         </div>
+      ) : bad.length > 0 ? (
+        <div style={{ marginTop: 8, font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>
+          SMS alifbosida yo'q belgilar: <b>{bad.join(' ')}</b> — xabar qimmatroq tarifga o'tadi (70 belgi/SMS). Lotin harflari va oddiy belgilardan foydalaning.
+        </div>
       ) : (
         <div style={{ marginTop: 8, padding: '8px 11px', borderRadius: 9, background: 'var(--g-bg)', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
-          <span style={{ color: 'var(--g-ink-4)' }}>Namuna: </span>{fillTemplate(text, samples) || '—'}
+          <span style={{ color: 'var(--g-ink-4)' }}>Namuna: </span>{toGsm(fillTemplate(text, samples)) || '—'}
         </div>
       )}
     </div>
@@ -9332,7 +9364,9 @@ function SmsTemplatesCard() {
   // wrong instead of one message about the whole save.
   const broken = (rows || []).filter((t) => {
     const allowed = new Set((t.vars || []).map((v) => v.name));
-    return [...String(draft[t.key] ?? '').matchAll(TPL_PLACEHOLDER)].some((m) => !allowed.has(m[1]));
+    const text = String(draft[t.key] ?? '');
+    return [...text.matchAll(TPL_PLACEHOLDER)].some((m) => !allowed.has(m[1]))
+      || nonGsm(text.replace(/[{}]/g, '')).length > 0;
   });
 
   const save = async () => {
@@ -9388,7 +9422,7 @@ function SmsTemplatesCard() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, marginTop: 16 }}>
         <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
           {broken.length > 0
-            ? "Noma'lum o'zgaruvchi bor — tuzating"
+            ? "Xato bor (o'zgaruvchi yoki belgi) — tuzating"
             : changed.length
               ? `${changed.length} ta shablon o'zgardi`
               : savedAt
