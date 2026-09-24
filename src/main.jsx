@@ -3398,7 +3398,15 @@ function BookingForm({ booking, onClose, onSave }) {
           ...(blConfirmed ? { overrideBlacklist: true } : {}),
         };
       }
-      if (isEdit) await api.patch(`/bookings/${booking.id}`, payload);
+      if (isEdit) {
+        const res = await api.patch(`/bookings/${booking.id}`, payload);
+        // A moved term can strand ESFs already filed for months it no longer
+        // covers — the same warning as an early end.
+        const stale = (res && res.staleInvoices) || [];
+        if (stale.length) {
+          window.alert(`Diqqat: ${stale.map((i) => i.period).join(', ')} davrlari uchun ESF mavjud — ijara endi bu oylarni qamramaydi.`);
+        }
+      }
       // Operator-created bookings are confirmed on the spot (the operator is
       // making the reservation, not requesting one), so they immediately hold
       // the slot AND count toward the building's occupied m². Only future
@@ -8489,9 +8497,13 @@ function BookingMoneySections({ b }) {
   // global datasets (debtors badge) in the background.
   const refreshAll = () => { load(); if (window.__gorentRefresh) window.__gorentRefresh(); };
 
+  // A void, not an erase: the payment is archived server-side with the reason,
+  // so the reason is required.
   const delPayment = async (p) => {
-    if (!window.confirm(`${p.id} to'lovini o'chirasizmi? (tuzatish)`)) return;
-    try { await api.del(`/payments/${p.id}`); refreshAll(); } catch (e) { window.alert(e.message); }
+    const reason = window.prompt(`${p.id} to'lovini bekor qilasizmi? Sababini yozing:`);
+    if (reason == null) return;
+    if (reason.trim().length < 3) { window.alert('Sababni yozing (kamida 3 belgi).'); return; }
+    try { await api.del(`/payments/${p.id}`, { reason: reason.trim() }); refreshAll(); } catch (e) { window.alert(e.message); }
   };
   const delCharge = async (c) => {
     if (!window.confirm(`"${c.title}" xarajatini o'chirasizmi?`)) return;
