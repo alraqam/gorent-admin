@@ -10429,7 +10429,9 @@ function AdminApp() {
   // any component can trigger a refresh via gorentMutate() without prop drilling.
   const [, setDataVersion] = React.useState(0);
   React.useEffect(() => {
-    window.__gorentRefresh = async () => { await api.bootstrap(); setDataVersion((v) => v + 1); };
+    // Reloads only what the writes since the last refresh can have changed
+    // (api.js AFFECTS); an unrecognised write still reloads everything.
+    window.__gorentRefresh = async () => { await api.refreshTouched(); setDataVersion((v) => v + 1); };
     return () => { delete window.__gorentRefresh; };
   }, []);
   // The view follows who signed in; only a platform user may flip to the

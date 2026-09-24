@@ -38,7 +38,14 @@ class ApiError extends Error {
   }
 }
 
+// Resources written since the last refresh ("payments", "contracts", …) — so a
+// refresh can reload what those writes can have changed instead of all of it.
+const touched = new Set();
+const resourceOf = (path) => (String(path).split('?')[0].split('/').filter(Boolean)[0] || '');
+
 async function request(path, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+  if (method !== 'GET') touched.add(resourceOf(path));
   const headers = { ...(options.headers || {}) };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -196,79 +203,107 @@ function logout() {
 }
 
 // Load all datasets the dashboard renders, then publish onto window globals.
-async function bootstrap() {
-  const role = currentUser()?.role;
+const EMPTY_DEBTORS = { totals: { outstanding: 0, prepaid: 0, prepaidCount: 0, debtorCount: 0 }, rows: [], prepaid: [] };
+
+// Every dataset the dashboard reads, by name: how to fetch it and where it
+// goes. They load IN PARALLEL — the platform-only lists and /debtors used to
+// wait one after another behind everything else.
+//
+// Platform-only endpoints (settings carry commission rates and the seller's
+// bank requisites; hosts, payouts, invoices and companies are platform lists)
+// resolve to a fallback for everyone else — a 403 must never break a host's
+// bootstrap. The notification feed is scoped per host on the server.
+function loaders(role) {
+  const platform = role === 'platform';
+  const only = (path, fallback) => (platform ? get(path).catch(() => fallback) : Promise.resolve(fallback));
+  return {
+    overview: async () => {
+      const overview = await get('/overview');
+      window.KPIS = overview.kpis;
+      window.COUNTS = overview.counts || null;
+      window.revenueSeries = overview.revenueSeries;
+      window.bookingsSeries = overview.bookingsSeries;
+      window.byCategory = overview.byCategory;
+      if (overview.totals) {
+        window.totalRevenue = overview.totals.totalRevenue;
+        window.totalBookings = overview.totals.totalBookings;
+        window.activeBookings = overview.totals.activeBookings;
+        window.avgOccupancy = overview.totals.avgOccupancy;
+        window.spaceOccupancy = overview.totals.spaceOccupancy || null;
+        window.pendingApproval = overview.totals.pendingApproval;
+        window.avgRating = overview.totals.avgRating;
+      }
+    },
+    meta: async () => { window.META = await get('/meta').catch(() => null); },
+    buildings: async () => { window.BUILDINGS = await get('/buildings'); },  // each includes offerings
+    products: async () => { window.PRODUCTS = await get('/products'); },     // global catalog + own offerings
+    units: async () => { window.UNITS = await get('/units'); },              // + offering, effectivePrice
+    bookings: async () => { window.BOOKINGS = await get('/bookings'); },
+    reviews: async () => { window.REVIEWS = await get('/reviews'); },
+    notifs: async () => { window.NOTIFS = await get('/notifications').catch(() => []); },
+    settings: async () => { window.SETTINGS = await only('/settings', null); },
+    integrations: async () => { window.INTEGRATIONS = await get('/integrations').catch(() => []); },
+    hosts: async () => { window.HOSTS = await only('/hosts', []); },
+    payouts: async () => { window.PAYOUTS = await only('/payouts', []); },
+    invoices: async () => { window.INVOICES = await only('/invoices', []); },
+    companies: async () => { window.COMPANIES = await only('/companies', []); },
+    // Receivables for Qarzdorlik + the nav badge; host-scoped on the server.
+    debtors: async () => { window.DEBTORS = await get('/debtors').catch(() => EMPTY_DEBTORS); },
+  };
+}
+
+// Which datasets a write to each resource can change. A resource missing
+// from this map reloads EVERYTHING — the safe answer for a write nobody
+// thought about, so a new endpoint can make a refresh slower but never stale.
+const MONEY = ['debtors', 'overview', 'notifs'];
+const AFFECTS = {
+  bookings: ['bookings', 'units', 'buildings', 'overview', 'debtors', 'invoices', 'notifs'],
+  contracts: ['bookings', 'debtors', 'invoices', 'notifs'],
+  payments: [...MONEY, 'invoices', 'bookings'],
+  charges: [...MONEY, 'invoices', 'bookings'],
+  invoices: ['invoices', ...MONEY],
+  bank: [...MONEY, 'invoices', 'companies', 'bookings'],
+  collection: MONEY,
+  'debt-notes': MONEY,
+  blacklist: ['companies', 'debtors', 'bookings'],
+  companies: ['companies', 'bookings', 'debtors'],
+  buildings: ['buildings', 'products', 'units', 'overview'],
+  offerings: ['buildings', 'products', 'units', 'overview'],
+  units: ['units', 'buildings', 'products', 'overview'],
+  products: ['products', 'buildings', 'units', 'overview'],
+  reviews: ['reviews', 'overview'],
+  hosts: ['hosts', 'buildings'],
+  payouts: ['payouts'],
+  'payout-statements': ['payouts'],
+  settings: ['settings'],
+  integrations: ['integrations'],
+  notifications: ['notifs'],
+  users: [],
+  agents: ['hosts'],
+  sms: ['notifs'],
+};
+
+/**
+ * Load datasets onto the window globals the screens read. With no argument,
+ * all of them (sign-in, reload). With a list, only those.
+ */
+async function bootstrap(only) {
   // Before anything renders — the UI asks `can()` while drawing its first frame.
   await loadMandate();
-  // Settings are platform-only on the API (the document carries commission
-  // rates and the seller's bank requisites), so they are fetched for platform
-  // accounts only — a 403 here must never break a host's bootstrap. The
-  // notification feed is scoped per host on the server and fetched by all.
-  const platformOnly = (path, fallback) =>
-    role === 'platform' ? get(path).catch(() => fallback) : Promise.resolve(fallback);
-  const [overview, meta, buildings, products, units, bookings, reviews, notifs, settings, integrations] = await Promise.all([
-    get('/overview'),
-    get('/meta').catch(() => null),
-    get('/buildings'),
-    get('/products'),
-    get('/units'),
-    get('/bookings'),
-    get('/reviews'),
-    get('/notifications').catch(() => []),
-    platformOnly('/settings', null),
-    get('/integrations').catch(() => []),
-  ]);
+  const all = loaders(currentUser()?.role);
+  const names = only ? only.filter((n) => all[n]) : Object.keys(all);
+  await Promise.all(names.map((n) => all[n]()));
+  touched.clear();
+}
 
-  window.SETTINGS = settings;
-  window.INTEGRATIONS = integrations;
-  window.META = meta;
-
-  // Hosts directory, payouts, invoices and companies are platform-only —
-  // a 403 here must never break the host account's bootstrap.
-  let hosts = [];
-  let payouts = [];
-  let invoices = [];
-  let companies = [];
-  if (role === 'platform') {
-    try { hosts = await get('/hosts'); } catch { hosts = []; }
-    try { payouts = await get('/payouts'); } catch { payouts = []; }
-    try { invoices = await get('/invoices'); } catch { invoices = []; }
-    try { companies = await get('/companies'); } catch { companies = []; }
-  }
-
-  // Receivables snapshot for the Qarzdorlik screen + nav badge. Host-scoped
-  // server-side, so both platform and host accounts fetch it.
-  try {
-    window.DEBTORS = await get('/debtors');
-  } catch {
-    window.DEBTORS = { totals: { outstanding: 0, prepaid: 0, prepaidCount: 0, debtorCount: 0 }, rows: [], prepaid: [] };
-  }
-
-  window.BUILDINGS = buildings;   // each includes offerings: [{product, units, price, status}]
-  window.PRODUCTS = products;     // global catalog — each includes offerings + building
-  window.UNITS = units;           // each includes offering (product+building) + effectivePrice
-  window.HOSTS = hosts;
-  window.BOOKINGS = bookings;
-  window.REVIEWS = reviews;
-  window.PAYOUTS = payouts;
-  window.INVOICES = invoices;
-  window.COMPANIES = companies;
-  window.NOTIFS = notifs;
-
-  window.KPIS = overview.kpis;
-  window.COUNTS = overview.counts || null;
-  window.revenueSeries = overview.revenueSeries;
-  window.bookingsSeries = overview.bookingsSeries;
-  window.byCategory = overview.byCategory;
-  if (overview.totals) {
-    window.totalRevenue = overview.totals.totalRevenue;
-    window.totalBookings = overview.totals.totalBookings;
-    window.activeBookings = overview.totals.activeBookings;
-    window.avgOccupancy = overview.totals.avgOccupancy;
-    window.spaceOccupancy = overview.totals.spaceOccupancy || null;
-    window.pendingApproval = overview.totals.pendingApproval;
-    window.avgRating = overview.totals.avgRating;
-  }
+/** Reload what the writes since the last refresh can have changed. */
+async function refreshTouched() {
+  const resources = [...touched];
+  if (!resources.length) return bootstrap();
+  if (resources.some((r) => !(r in AFFECTS))) return bootstrap();
+  const names = [...new Set(resources.flatMap((r) => AFFECTS[r]))];
+  if (!names.length) { touched.clear(); return; }
+  return bootstrap(names);
 }
 
 export const api = {
@@ -277,7 +312,7 @@ export const api = {
   BASE,
   getToken, setToken, clearToken, currentUser, isAuthed,
   get, post, put, patch, del, upload, fileBlobUrl, downloadFile,
-  login, logout, bootstrap,
+  login, logout, bootstrap, refreshTouched,
   can,
   ApiError,
 };
