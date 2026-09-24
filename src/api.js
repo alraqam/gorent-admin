@@ -200,10 +200,10 @@ async function bootstrap() {
   const role = currentUser()?.role;
   // Before anything renders — the UI asks `can()` while drawing its first frame.
   await loadMandate();
-  // Settings and the notification feed are platform-only on the API (the
-  // settings document carries commission rates and the seller's bank
-  // requisites; the feed names every host's tenants). Fetched for platform
-  // accounts only — a 403 here must never break a host's bootstrap.
+  // Settings are platform-only on the API (the document carries commission
+  // rates and the seller's bank requisites), so they are fetched for platform
+  // accounts only — a 403 here must never break a host's bootstrap. The
+  // notification feed is scoped per host on the server and fetched by all.
   const platformOnly = (path, fallback) =>
     role === 'platform' ? get(path).catch(() => fallback) : Promise.resolve(fallback);
   const [overview, meta, buildings, products, units, bookings, reviews, notifs, settings, integrations] = await Promise.all([
@@ -214,7 +214,7 @@ async function bootstrap() {
     get('/units'),
     get('/bookings'),
     get('/reviews'),
-    platformOnly('/notifications', []),
+    get('/notifications').catch(() => []),
     platformOnly('/settings', null),
     get('/integrations').catch(() => []),
   ]);
