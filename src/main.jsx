@@ -1664,13 +1664,13 @@ function Sidebar({ route, setRoute, role, counts }) {
           <span style={{ display: 'flex', color: route.section === 'settings' ? 'var(--g-brand)' : 'rgba(255,255,255,0.55)' }}><IconSettings size={18} /></span> {window.AT.navSettings}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 10px 4px' }}>
-          <Avatar name="Admin Operator" size={34} hue={155} />
+          <Avatar name={whoAmI().name} size={34} hue={155} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ font: `600 12.5px ${window.GO.font}`, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {role === 'host' ? "Aziza Rashidova" : "Admin Operator"}
+              {whoAmI().name}
             </div>
-            <div style={{ font: `400 11px ${window.GO.font}`, color: 'rgba(255,255,255,0.45)' }}>
-              {role === 'host' ? "AR Estate · mezbon" : "Platforma · super-admin"}
+            <div style={{ font: `400 11px ${window.GO.font}`, color: 'rgba(255,255,255,0.45)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {whoAmI().sub}
             </div>
           </div>
           <button title="Chiqish" onClick={() => window.__gorentLogout()} className="adm-iconbtn" style={{ color: 'rgba(255,255,255,0.4)', display: 'flex', background: 'transparent', border: 0, cursor: 'pointer', padding: 4 }}><IconLogout size={16} /></button>
@@ -1731,6 +1731,23 @@ function NotificationsBell({ onNavigate }) {
 }
 
 // ─── Topbar ─────────────────────────────────────────────────
+// Who is signed in, as the chrome shows it. These were hard-coded prototype
+// strings ("Admin Operator", "Aziza Rashidova"), so every owner and broker saw
+// someone else's name in their own sidebar.
+function whoAmI() {
+  const u = api.currentUser() || {};
+  const name = u.name || u.email || '—';
+  const sub = u.role === 'platform' ? `${u.org || 'Gorent'} · platforma`
+    : u.role === 'agent' ? `${u.org || ''} · vakil`
+    : `${u.org || ''} · mezbon`;
+  return { name, sub, first: String(name).split(' ')[0], role: u.role };
+}
+
+const todayLabel = () => {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+};
+
 function Topbar({ title, sub, role, onRole, search, setSearch, actions, onNavigate }) {
   return (
     <div style={{
@@ -1744,8 +1761,10 @@ function Topbar({ title, sub, role, onRole, search, setSearch, actions, onNaviga
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         <SearchInput value={search} onChange={setSearch} width={220} />
         {actions}
-        {/* Role switch */}
-        <div style={{ display: 'inline-flex', gap: 2, padding: 3, background: 'var(--g-bg-2)', borderRadius: 999 }}>
+        {/* View switch — a platform user may preview the owner's view. Owners
+            and brokers are always in the owner's view: it is all the API
+            lets them reach anyway. */}
+        {whoAmI().role === 'platform' && <div style={{ display: 'inline-flex', gap: 2, padding: 3, background: 'var(--g-bg-2)', borderRadius: 999 }}>
           {[['platform', window.AT.rolePlatform], ['host', window.AT.roleHost]].map(([v, lbl]) => (
             <button key={v} onClick={() => onRole(v)} title={lbl} style={{
               padding: '6px 12px', borderRadius: 999, border: 0, cursor: 'pointer',
@@ -1754,7 +1773,7 @@ function Topbar({ title, sub, role, onRole, search, setSearch, actions, onNaviga
               display: 'flex', alignItems: 'center', gap: 6,
             }}>{v === 'platform' ? <IconShield size={13} /> : <IconUser size={13} />}{v === 'platform' ? 'Platforma' : 'Mezbon'}</button>
           ))}
-        </div>
+        </div>}
         <NotificationsBell onNavigate={onNavigate} />
       </div>
     </div>
@@ -2125,7 +2144,7 @@ function Overview({ variant, setLayout, setRoute }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>
-          Salom, Operator — bugun platformada <b style={{ color: 'var(--g-ink)' }}>{window.activeBookings}</b> ta faol bandlov.
+          Salom, {whoAmI().first} — bugun {whoAmI().role === 'platform' ? 'platformada ' : ''}<b style={{ color: 'var(--g-ink)' }}>{window.activeBookings}</b> ta faol bandlov.
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ font: `500 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Ko'rinish</span>
@@ -2172,16 +2191,45 @@ const CONNECTORS = {
     name: "ijara.soliq.uz", sub: "Soliq qo'mitasi · ijara shartnomasi ro'yxati" },
 };
 
-// Sample synced documents for a given virtual product (stable per id).
-function virtualDocs(p) {
-  const n = parseInt((p.id || 'L04').replace(/\D/g, ''), 10) || 4;
-  const yr = 2026;
-  return [
-    { id: 'd1', type: "Ijara shartnomasi", no: `IJ-${yr}-${String(40 + n).padStart(4, '0')}`, src: 'soliq', date: "01.06.2026", status: 'registered' },
-    { id: 'd2', type: "Elektron hisob-faktura (ESF)", no: `ESF-${String(88900 + n * 7)}`, src: 'didox', date: "02.06.2026", status: 'signed' },
-    { id: 'd3', type: "Topshirish-qabul dalolatnomasi", no: `ACT-${yr}-${200 + n}`, src: 'didox', date: "02.06.2026", status: 'sent' },
-    { id: 'd4', type: "Yuridik manzil tasdiqnomasi", no: `ADR-${1000 + n}`, src: 'soliq', date: "28.05.2026", status: 'registered' },
-  ];
+// The real official documents behind a product: the lease contracts on its
+// bookings (with the ijara.soliq.uz registration number once there is one) and
+// the ESFs issued on didox for them. This used to be four invented documents
+// ("ESF-88928 · Imzolangan · 02.06.2026") shown on every install.
+const fmtDocDate = (d) => {
+  if (!d) return '—';
+  const x = new Date(d);
+  return `${String(x.getDate()).padStart(2, '0')}.${String(x.getMonth() + 1).padStart(2, '0')}.${x.getFullYear()}`;
+};
+const unitsOfBooking = (b) => [b && b.unit, ...((b && b.items) || []).map((i) => i.unit)].filter(Boolean);
+const bookingHasProduct = (b, productId) =>
+  unitsOfBooking(b).some((u) => u.offering && (u.offering.productId === productId || (u.offering.product && u.offering.product.id === productId)));
+
+function productDocs(p, contracts) {
+  const bookingIds = new Set((window.BOOKINGS || []).filter((b) => bookingHasProduct(b, p.id)).map((b) => b.id));
+  // Leases first (there are few, and they are what the ESFs rest on), then
+  // the latest ESFs by period — a year of monthly invoices would otherwise
+  // push every contract off the list.
+  const leases = [];
+  const esfs = [];
+  for (const c of contracts || []) {
+    if (!bookingHasProduct(c.booking, p.id)) continue;
+    leases.push({
+      id: 'c-' + c.id, type: 'Ijara shartnomasi', no: c.soliqRegNumber || c.number, src: 'soliq',
+      at: c.signedAt || c.createdAt,
+      status: c.soliqRegNumber ? 'registered' : c.status === 'draft' ? 'pending' : 'sent',
+    });
+  }
+  for (const i of window.INVOICES || []) {
+    if (!bookingIds.has(i.bookingId)) continue;
+    esfs.push({ period: i.period,
+      id: 'i-' + i.id, type: `Elektron hisob-faktura (ESF) · ${i.period}`, no: i.docId || '—', src: 'didox',
+      at: i.updatedAt || i.createdAt,
+      status: i.status === 'sent' ? 'signed' : i.status === 'ready_to_sign' ? 'pending' : 'error',
+    });
+  }
+  leases.sort((x, y) => new Date(y.at) - new Date(x.at));
+  esfs.sort((x, y) => (y.period > x.period ? 1 : y.period < x.period ? -1 : 0));
+  return [...leases.slice(0, 4), ...esfs.slice(0, 6)];
 }
 
 // ─── Connector monogram tile ────────────────────────────────
@@ -2198,21 +2246,29 @@ function ConnTile({ c, size = 40 }) {
 
 // ─── Full integration panel (detail drawer) ─────────────────
 function VirtualOfficeIntegration({ p }) {
-  const [conns, setConns] = React.useState({
-    didox: { status: 'connected', last: "02.06.2026 · 14:20" },
-    soliq: { status: 'connected', last: "01.06.2026 · 09:05" },
-  });
-  const docs = React.useMemo(() => virtualDocs(p), [p.id]);
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
+  const fromCatalog = (key) => {
+    const it = (window.INTEGRATIONS || []).find((x) => x.key === key);
+    return { status: it && it.status === 'connected' ? 'connected' : 'off', last: (it && it.lastSync) || '—' };
+  };
+  const [conns, setConns] = React.useState({ didox: fromCatalog('didox'), soliq: fromCatalog('soliq') });
+  const [contracts, setContracts] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    api.get('/contracts').then((r) => { if (live) setContracts(Array.isArray(r) ? r : []); }).catch(() => { if (live) setContracts([]); });
+    return () => { live = false; };
+  }, [p.id]);
+  const docs = React.useMemo(() => productDocs(p, contracts), [p.id, contracts]);
 
+  // A real connectivity check (platform only). A failed check leaves the
+  // status as it was and says so — it used to report "Ulangan" regardless.
   const sync = (key) => {
+    setErr(null);
     setConns((s) => ({ ...s, [key]: { ...s[key], status: 'syncing' } }));
     api.post(`/integrations/${key}/sync`)
-      .then((r) => setConns((s) => ({ ...s, [key]: { status: 'connected', last: (r && r.lastSync) || 'hozirgina' } })))
-      .catch(() => setConns((s) => ({ ...s, [key]: { status: 'connected', last: 'hozirgina' } })));
-  };
-  const connect = (key) => {
-    api.post(`/integrations/${key}/connect`).catch(() => {});
-    setConns((s) => ({ ...s, [key]: { status: 'connected', last: 'hozirgina' } }));
+      .then((r) => setConns((s) => ({ ...s, [key]: { status: r && r.status === 'connected' ? 'connected' : 'off', last: (r && r.lastSync) || s[key].last } })))
+      .catch((e) => { setConns((s) => ({ ...s, [key]: fromCatalog(key) })); setErr((e && e.message) || "Tekshirib bo'lmadi"); });
   };
   const syncAll = () => { sync('didox'); sync('soliq'); };
   const anySyncing = conns.didox.status === 'syncing' || conns.soliq.status === 'syncing';
@@ -2224,10 +2280,10 @@ function VirtualOfficeIntegration({ p }) {
           <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconShieldCheck size={16} /></span>
           <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>Rasmiy hujjat integratsiyasi</div>
         </div>
-        <Btn kind="ghost" sm onClick={syncAll} disabled={anySyncing}>
+        {isPlatform && <Btn kind="ghost" sm onClick={syncAll} disabled={anySyncing}>
           <span className={anySyncing ? 'adm-spin' : ''} style={{ display: 'flex' }}><IconRefresh size={14} /></span>
-          Hammasini sinxronlash
-        </Btn>
+          Hammasini tekshirish
+        </Btn>}
       </div>
 
       {/* Connector cards */}
@@ -2246,16 +2302,14 @@ function VirtualOfficeIntegration({ p }) {
                 <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.sub}</div>
                 {st.status !== 'off' && (
                   <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>
-                    So'nggi sinxron: <span style={{ color: 'var(--g-ink-3)', fontWeight: 500 }}>{st.last}</span>
+                    So'nggi tekshiruv: <span style={{ color: 'var(--g-ink-3)', fontWeight: 500 }}>{st.last}</span>
                   </div>
                 )}
               </div>
-              {st.status === 'off'
-                ? <Btn kind="primary" sm onClick={() => connect(key)}><IconLink size={14} /> Ulash</Btn>
-                : <Btn kind="soft" sm onClick={() => sync(key)} disabled={st.status === 'syncing'}>
-                    <span className={st.status === 'syncing' ? 'adm-spin' : ''} style={{ display: 'flex' }}><IconRefresh size={14} /></span>
-                    {st.status === 'syncing' ? "Sinxron…" : "Sinxronlash"}
-                  </Btn>}
+              {isPlatform && <Btn kind="soft" sm onClick={() => sync(key)} disabled={st.status === 'syncing'}>
+                <span className={st.status === 'syncing' ? 'adm-spin' : ''} style={{ display: 'flex' }}><IconRefresh size={14} /></span>
+                {st.status === 'syncing' ? "Tekshirilmoqda…" : "Tekshirish"}
+              </Btn>}
             </div>
           );
         })}
@@ -2264,10 +2318,16 @@ function VirtualOfficeIntegration({ p }) {
       {/* Synced documents */}
       <div style={{ marginTop: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Sinxronlangan hujjatlar</div>
-          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{docs.length} ta</span>
+          <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>Hujjatlar</div>
+          <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{contracts ? `${docs.length} ta` : 'yuklanmoqda…'}</span>
         </div>
-        <div style={{ borderRadius: 13, border: '1px solid var(--g-line)', overflow: 'hidden', background: 'var(--g-card)' }}>
+        {err && <div style={{ font: `500 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 8 }}>{err}</div>}
+        {contracts && !docs.length && (
+          <div style={{ padding: '14px', borderRadius: 13, border: '1px dashed var(--g-line)', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            Bu mahsulot bo'yicha hali shartnoma yoki hisob-faktura yo'q.
+          </div>
+        )}
+        {docs.length > 0 && <div style={{ borderRadius: 13, border: '1px solid var(--g-line)', overflow: 'hidden', background: 'var(--g-card)' }}>
           {docs.map((d, i) => {
             const c = CONNECTORS[d.src];
             return (
@@ -2278,67 +2338,23 @@ function VirtualOfficeIntegration({ p }) {
                   <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.type}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
                     <span style={{ fontFamily: 'ui-monospace, monospace' }}>№{d.no}</span> ·
-                    <span style={{ color: `oklch(0.5 0.12 ${c.hue})`, fontWeight: 600 }}>{c.domain}</span> · {d.date}
+                    <span style={{ color: `oklch(0.5 0.12 ${c.hue})`, fontWeight: 600 }}>{c.domain}</span> · {fmtDocDate(d.at)}
                   </div>
                 </div>
                 <StatusPill s={d.status} dict={DOC_STATUS} size="sm" />
-                <IconBtn title="Yuklab olish" style={{ width: 30, height: 30 }}><IconDownload size={15} /></IconBtn>
               </div>
             );
           })}
-        </div>
+        </div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-          <IconShieldCheck size={13} /> Hujjatlar avtomatik tarzda didox.uz va ijara.soliq.uz bilan sinxronlanadi.
+          <IconShieldCheck size={13} /> Shartnomalar va hisob-fakturalar o'z bo'limlarida to'liq ko'rinadi.
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Compact connect block (add/edit form) ──────────────────
-function VirtualIntegrationForm() {
-  const [stir, setStir] = React.useState("");
-  const [conns, setConns] = React.useState({ didox: 'off', soliq: 'off' });
-  const toggle = (key) => setConns((s) => ({ ...s, [key]: s[key] === 'connected' ? 'off' : 'connected' }));
-
-  return (
-    <Card>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-        <span style={{ color: 'var(--g-brand-ink)', display: 'flex' }}><IconShieldCheck size={17} /></span>
-        <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Rasmiy hujjat integratsiyasi</div>
-      </div>
-      <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 16 }}>
-        Virtual ofis uchun ijara shartnomasi va elektron hujjatlar rasmiy ravishda sinxronlanadi.
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>STIR (soliq to'lovchi raqami)</div>
-        <input className="adm-input" value={stir} onChange={(e) => setStir(e.target.value.replace(/\D/g, '').slice(0, 9))} placeholder="305112233" inputMode="numeric" />
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {['didox', 'soliq'].map((key) => {
-          const c = CONNECTORS[key]; const on = conns[key] === 'connected';
-          return (
-            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 12,
-              background: on ? 'var(--g-brand-soft)' : 'var(--g-bg)', border: `1px solid ${on ? 'var(--g-brand)' : 'var(--g-line)'}`, transition: 'all .14s' }}>
-              <ConnTile c={c} size={36} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{c.name}</div>
-                <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.sub}</div>
-              </div>
-              <Btn kind={on ? 'soft' : 'primary'} sm onClick={() => toggle(key)}>
-                {on ? <><IconCheck2 size={14} /> Ulangan</> : <><IconLink size={14} /> Ulash</>}
-              </Btn>
-            </div>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
-Object.assign(window, { VirtualOfficeIntegration, VirtualIntegrationForm, CONNECTORS, virtualDocs, CONN_STATUS, DOC_STATUS });
+Object.assign(window, { VirtualOfficeIntegration, CONNECTORS, productDocs, CONN_STATUS, DOC_STATUS });
 
 // ============================================================
 // src/admin-products.jsx
@@ -2707,8 +2723,6 @@ function ProductForm({ product, onClose, onSave }) {
             </div>
           </Card>
 
-          {/* Official document integration — virtual office only */}
-          {f.cat === 'virtual' && <VirtualIntegrationForm />}
         </div>
 
         {/* Right: summary + save */}
@@ -10340,7 +10354,7 @@ const ADMIN_BRAND_PRESETS = {
 };
 
 const SECTION_META = {
-  overview:  { title: () => window.AT.navOverview,  sub: () => "Bugungi ko'rsatkichlar · 03.06.2026" },
+  overview:  { title: () => window.AT.navOverview,  sub: () => `Bugungi ko'rsatkichlar · ${todayLabel()}` },
   products:  { title: () => window.AT.navProducts,  sub: () => `${window.PRODUCTS.length} ta katalog mahsuloti · 4 toifa` },
   bookings:  { title: () => window.AT.navBookings,  sub: () => `${window.BOOKINGS.length} ta bandlov` },
   contracts: { title: () => "Shartnomalar", sub: () => "Ijara shartnomalari · uzaytirish va bekor qilish" },
@@ -10406,11 +10420,14 @@ function AdminApp() {
     window.__gorentRefresh = async () => { await api.bootstrap(); setDataVersion((v) => v + 1); };
     return () => { delete window.__gorentRefresh; };
   }, []);
-  const [role, setRole] = React.useState(t.defaultRole || 'platform');
+  // The view follows who signed in; only a platform user may flip to the
+  // owner's view (the Tweaks default applies to them alone).
+  const viewFor = () => ((api.currentUser() || {}).role === 'platform' ? (t.defaultRole || 'platform') : 'host');
+  const [role, setRole] = React.useState(viewFor);
   const [search, setSearch] = React.useState('');
   const [formOpen, setFormOpen] = React.useState(null); // null | {product?}
 
-  React.useEffect(() => { setRole(t.defaultRole || 'platform'); }, [t.defaultRole]);
+  React.useEffect(() => { setRole(viewFor()); }, [t.defaultRole]);
   React.useEffect(() => { setSearch(''); setFormOpen(null); }, [route.section]);
 
   // Apply brand CSS vars
@@ -10600,10 +10617,10 @@ function SidebarLightInner({ route, setRoute, role, counts }) {
           <span style={{ display: 'flex', color: route.section === 'settings' ? 'var(--g-brand)' : 'var(--g-ink-4)' }}><IconSettings size={18} /></span> {window.AT.navSettings}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px' }}>
-          <Avatar name={role === 'host' ? "Aziza Rashidova" : "Admin Operator"} size={34} hue={155} />
+          <Avatar name={whoAmI().name} size={34} hue={155} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{role === 'host' ? "Aziza Rashidova" : "Admin Operator"}</div>
-            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{role === 'host' ? "AR Estate · mezbon" : "Platforma · super-admin"}</div>
+            <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{whoAmI().name}</div>
+            <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{whoAmI().sub}</div>
           </div>
           <button title="Chiqish" onClick={() => window.__gorentLogout()} className="adm-iconbtn" style={{ color: 'var(--g-ink-4)', display: 'flex', background: 'transparent', border: 0, cursor: 'pointer', padding: 4 }}><IconLogout size={16} /></button>
         </div>
