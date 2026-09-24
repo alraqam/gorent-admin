@@ -1611,6 +1611,22 @@ const navFor = () => {
   return NAV.filter((n) => !n.platformOnly || platform);
 };
 
+// The logo always goes home: the dashboard. A real link to "/", so opening it
+// in a new tab works too; a plain click stays in the app.
+function BrandLink({ setRoute, children }) {
+  return (
+    <a href="/" title="Boshqaruv paneli" aria-label="Boshqaruv paneliga qaytish"
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        setRoute({ section: 'overview' });
+      }}
+      style={{ padding: '20px 18px 18px', display: 'flex', alignItems: 'center', gap: 10, color: 'inherit', textDecoration: 'none', cursor: 'pointer' }}>
+      {children}
+    </a>
+  );
+}
+
 function Sidebar({ route, setRoute, role, counts }) {
   const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
   return (
@@ -1619,7 +1635,7 @@ function Sidebar({ route, setRoute, role, counts }) {
       display: 'flex', flexDirection: 'column', height: '100%',
     }}>
       {/* Brand */}
-      <div style={{ padding: '20px 18px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <BrandLink setRoute={setRoute}>
         <img src="/assets/gorent-symbol.svg" alt="Gorent" style={{ width: 30, height: 30, display: 'block' }} />
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
           <span style={{ font: `700 19px ${window.GO.font}`, letterSpacing: '-0.03em' }}>gorent</span>
@@ -1627,7 +1643,7 @@ function Sidebar({ route, setRoute, role, counts }) {
             color: 'var(--g-brand)', textTransform: 'uppercase', background: 'rgba(255,255,255,0.08)',
             padding: '2px 6px', borderRadius: 5 }}>admin</span>
         </div>
-      </div>
+      </BrandLink>
 
       {/* Nav */}
       <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: '6px 12px' }}>
@@ -10600,13 +10616,13 @@ function SidebarLightInner({ route, setRoute, role, counts }) {
   const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
   return (
     <div style={{ width: 244, flexShrink: 0, background: 'var(--g-card)', borderRight: '1px solid var(--g-line)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: '20px 18px 18px', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <BrandLink setRoute={setRoute}>
         <img src="/assets/gorent-symbol.svg" alt="Gorent" style={{ width: 30, height: 30, display: 'block' }} />
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
           <span style={{ font: `700 19px ${window.GO.font}`, letterSpacing: '-0.03em', color: 'var(--g-ink)' }}>gorent</span>
           <span style={{ font: `500 10px ui-monospace, monospace`, letterSpacing: '0.14em', color: 'var(--g-brand-ink)', textTransform: 'uppercase', background: 'var(--g-brand-soft)', padding: '2px 6px', borderRadius: 5 }}>admin</span>
         </div>
-      </div>
+      </BrandLink>
       <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: '6px 12px' }}>
         <div style={{ font: `600 10px ui-monospace, monospace`, letterSpacing: '0.14em', color: 'var(--g-ink-4)', padding: '10px 10px 8px', textTransform: 'uppercase' }}>Menyu</div>
         {window.navFor().map((n) => {
