@@ -10642,25 +10642,43 @@ function CenterShell({ children }) {
   );
 }
 
+// The shared accounts on the demo install (api/src/store/seed.ts). Shown only
+// when the API reports demo mode — the real install gets a plain login.
+const DEMO_ACCOUNTS = [
+  { email: 'operator@gorent.uz', role: 'Platforma operatori', sub: "Barcha binolar, qarzdorlik, hisob-fakturalar, qora ro'yxat" },
+  { email: 'aziza@gorent.uz', role: 'Mezbon · AR Estate', sub: 'Ofislar: qarzdor, sobiq ijarachi, tugayotgan shartnoma' },
+  { email: 'sanjar@gorent.uz', role: 'Mezbon · Sun Tower', sub: "Koworking: bugungi yig'ilishlar, katta qarzdor" },
+  { email: 'rustam@gorent.uz', role: 'Mezbon · IT Park', sub: 'Kichik mulkdor, bitta yangi qarzdor' },
+  { email: 'plaza@gorent.uz', role: 'Mezbon · Plaza Holding', sub: 'Yangi mulkdor: bino tasdiqlash kutmoqda' },
+  { email: 'vakil@gorent.uz', role: 'Vakil · Makon Broker', sub: 'Ikki mulkdor nomidan ishlaydi' },
+];
+const DEMO_PASSWORD = 'gorent123';
+
 function LoginScreen({ onLogin }) {
-  const [email, setEmail] = React.useState('operator@gorent.uz');
-  const [password, setPassword] = React.useState('gorent123');
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
+  const [demo, setDemo] = React.useState(false);
 
-  const submit = async (e) => {
-    e.preventDefault();
+  React.useEffect(() => {
+    let live = true;
+    api.health().then((h) => { if (live) setDemo(!!h?.demo); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+
+  const signIn = async (em, pw) => {
     setBusy(true); setErr(null);
     try {
-      await api.login(email, password);
+      await api.login(em, pw);
       onLogin();
     } catch (ex) {
       setErr(ex.status === 401 ? "Email yoki parol noto'g'ri" : (ex.message || 'Ulanishda xatolik'));
       setBusy(false);
     }
   };
-
-  const fill = (em) => { setEmail(em); setPassword('gorent123'); };
+  const submit = (e) => { e.preventDefault(); signIn(email, password); };
+  const demoSignIn = (em) => { setEmail(em); setPassword(DEMO_PASSWORD); signIn(em, DEMO_PASSWORD); };
 
   return (
     <CenterShell>
@@ -10691,13 +10709,21 @@ function LoginScreen({ onLogin }) {
               {busy ? 'Kirilmoqda…' : 'Kirish'}
             </Btn>
           </form>
-          <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--g-line)' }}>
-            <div style={{ font: `500 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Demo hisoblar</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Btn kind="soft" sm onClick={() => fill('operator@gorent.uz')} style={{ flex: 1, justifyContent: 'center' }}>Platforma admini</Btn>
-              <Btn kind="soft" sm onClick={() => fill('aziza@gorent.uz')} style={{ flex: 1, justifyContent: 'center' }}>Mezbon</Btn>
+          {demo && (
+            <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--g-line)' }}>
+              <div style={{ font: `500 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Demo hisoblar</div>
+              <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 10 }}>Rolni tanlang — bir bosishda kirasiz. Ma'lumotlar har kuni tiklanadi.</div>
+              <div style={{ display: 'grid', gap: 6 }}>
+                {DEMO_ACCOUNTS.map((a) => (
+                  <button key={a.email} type="button" onClick={() => demoSignIn(a.email)} disabled={busy}
+                    style={{ textAlign: 'left', padding: '9px 12px', borderRadius: 10, border: '1px solid var(--g-line)', background: 'var(--g-surface, transparent)', cursor: busy ? 'default' : 'pointer', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+                    <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{a.role}</div>
+                    <div style={{ marginTop: 2 }}>{a.sub}</div>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </Card>
       </div>
     </CenterShell>

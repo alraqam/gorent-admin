@@ -272,6 +272,8 @@ async function bootstrap() {
 }
 
 export const api = {
+  // Public: service status, incl. whether this install is the demo.
+  health: () => get('/health'),
   BASE,
   getToken, setToken, clearToken, currentUser, isAuthed,
   get, post, put, patch, del, upload, fileBlobUrl, downloadFile,
