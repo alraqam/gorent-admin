@@ -1585,7 +1585,7 @@ const NAV = [
   { id: 'products',  label: () => window.AT.navProducts,  icon: IconBox },
   { id: 'bookings',  label: () => window.AT.navBookings,  icon: IconCal },
   { id: 'contracts', label: () => "Shartnomalar",          icon: IconDoc },
-  { id: 'debtors',   label: () => "Qarzdorlik",            icon: IconWarn },
+  { id: 'debtors',   label: () => "Undiruv",               icon: IconWarn },
   // Both endpoints are @Roles('platform') — bootstrap() already skips fetching
   // them for anyone else, so a host or a broker clicking these landed on an
   // empty screen with no explanation. Don't offer the door.
@@ -4977,7 +4977,7 @@ function CompanyForm({ company, onClose }) {
                 background: 'color-mix(in oklch, oklch(0.7 0.15 55) 12%, transparent)',
                 font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-2)',
               }}>
-                Ijara hisoblanishi davom etadi — ijarachi «Qarzdorlik» ro‘yxatida qoladi va
+                Ijara hisoblanishi davom etadi — ijarachi «Undiruv» ro‘yxatida qoladi va
                 to‘lov eslatmalarini oladi. Faqat ESF yaratilmaydi.
               </div>
             </div>
@@ -6017,7 +6017,7 @@ const PROMISE_META = {
 };
 
 const EVENT_META = {
-  followup:        { label: 'Ish rejasi', hue: 250 },
+  followup:        { label: 'Vazifa', hue: 250 },
   promise:         { label: "To'lov va'dasi", hue: 55 },
   contract_expiry: { label: 'Shartnoma tugaydi', hue: 300 },
   lease_end:       { label: 'Ijara tugaydi', hue: 200 },
@@ -7068,8 +7068,9 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
   );
 }
 
-// ─── Ishlar ─────────────────────────────────────────────────
-// Every follow-up on the book, as its own tab. It used to be a strip pinned
+// ─── Vazifalar ──────────────────────────────────────────────
+// Every follow-up on the book, as its own tab (Kun tartibi — "ish" on this
+// screen means a collection case). It used to be a strip pinned
 // above the debtors table — the same eight rows on both tabs, unfiltered, and
 // with nothing to do but tick one. Here it is a work queue: bucketed by when
 // it is due, filtered by group/kind/source, actionable in bulk.
@@ -7263,7 +7264,7 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
         {filterSelect(source, setSource, [['all', 'Avto va qo\'lda'], ['auto', 'Avtomatik'], ['manual', "Qo'lda"]])}
         <input className="adm-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Qidirish…" style={{ width: 200 }} />
         <div style={{ flex: 1 }} />
-        <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Yangi ish</Btn>
+        <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Yangi vazifa</Btn>
       </div>
 
       {/* Bulk bar — only with a selection, so it never competes with the list. */}
@@ -7291,14 +7292,14 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
         {!data && !err && <div style={{ padding: 16, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>}
         {data && !shown.length && (
           <div style={{ padding: 28, textAlign: 'center', font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-            {status === 'done' ? "So'nggi 30 kunda bajarilgan ish yo'q." : bucket === 'due' ? 'Bugunga ish qolmadi 🎉' : "Bu filtrda ish yo'q."}
+            {status === 'done' ? "So'nggi 30 kunda bajarilgan vazifa yo'q." : bucket === 'due' ? 'Bugunga vazifa qolmadi 🎉' : "Bu filtrda vazifa yo'q."}
           </div>
         )}
         {page.length > 0 && (
           <label style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--g-line)', font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)', cursor: 'pointer' }}>
             <input type="checkbox" checked={allOnPage} onChange={toggleAll} />
             Hammasini tanlash ({page.length})
-            <span style={{ marginLeft: 'auto', fontWeight: 400 }}>{shown.length} ta ish</span>
+            <span style={{ marginLeft: 'auto', fontWeight: 400 }}>{shown.length} ta vazifa</span>
           </label>
         )}
         {sections.map((s) => (
@@ -7363,7 +7364,7 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
         )}
       </Card>
 
-      <GoModal open={adding} onClose={closeAdd} title="Yangi ish" width={620}>
+      <GoModal open={adding} onClose={closeAdd} title="Yangi vazifa" width={620}>
         {adding && (
           <>
             <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Ijarachi</div>
@@ -8390,10 +8391,10 @@ function DebtorsScreen({ search }) {
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
   const [blacklisting, setBlacklisting] = React.useState(null); // former debtor → blacklist modal
   const [detail, setDetail] = React.useState(null); // debtor row → collection drawer
-  // Bumped whenever a note changes, so the Ishlar tab and its count reload
+  // Bumped whenever a note changes, so the Kun tartibi tab and its count reload
   // without waiting for a full bootstrap.
   const [noteVersion, setNoteVersion] = React.useState(0);
-  // Due-now count (overdue + today) for the Ishlar tab label.
+  // Due-now count (overdue + today) for the Kun tartibi tab label.
   const [due, setDue] = React.useState(null);
   React.useEffect(() => {
     api.get('/debt-notes/worklist').then(setDue).catch(() => setDue(null));
@@ -8419,7 +8420,7 @@ function DebtorsScreen({ search }) {
   const stageCounts = tabRows.reduce((acc, r) => { const k = caseKey(r); acc[k] = (acc[k] || 0) + 1; return acc; }, {});
   const stageOptions = [
     { k: 'all', label: 'Barchasi' },
-    { k: 'none', label: 'Ishsiz' },
+    { k: 'none', label: 'Yangi' },
     ...Object.entries(CASE_STAGE).map(([k, v]) => ({ k, label: v.label, hue: v.hue })),
     { k: 'paused', label: CASE_STATUS.paused.label, hue: CASE_STATUS.paused.hue },
   ];
@@ -8538,39 +8539,35 @@ function DebtorsScreen({ search }) {
   return (
     <div>
       {(
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18, borderBottom: '1px solid var(--g-line)' }}>
+        <div style={{ marginBottom: 18, borderBottom: '1px solid var(--g-line)', overflowX: 'auto' }}>
           <div style={{ display: 'flex', gap: 4 }}>
           {[
-            { id: 'current', label: `Joriy ijarachilar${totals.current?.count ? ` · ${totals.current.count}` : ''}` },
-            { id: 'former', label: `Sobiq ijarachilar${totals.former?.count ? ` · ${totals.former.count}` : ''}` },
+            { id: 'current', label: `Joriy${totals.current?.count ? ` · ${totals.current.count}` : ''}`, title: 'Joriy ijarachilar — ijarasi davom etayotgan qarzdorlar' },
+            { id: 'former', label: `Sobiq${totals.former?.count ? ` · ${totals.former.count}` : ''}`, title: "Sobiq ijarachilar — ijarasi tugagan, qarzi qolganlar" },
             // Money in ahead of the bill. Its own tab because it is the
             // opposite job: nobody is chased, but a credit on a finished lease
             // is a refund waiting to be paid back.
-            { id: 'prepaid', label: `Oldindan to'lovlar${totals.prepaidCount ? ` · ${totals.prepaidCount}` : ''}` },
+            { id: 'prepaid', label: `Avanslar${totals.prepaidCount ? ` · ${totals.prepaidCount}` : ''}`, title: "Oldindan to'lovlar" },
             // Follow-ups due now — the count turns red once a day has been missed.
-            { id: 'tasks', label: <>Ishlar{due?.count ? <span style={{ color: due.overdue ? 'oklch(0.5 0.16 25)' : 'inherit' }}> · {due.count}</span> : null}</> },
+            { id: 'tasks', label: <>Kun tartibi{due?.count ? <span style={{ color: due.overdue ? 'oklch(0.5 0.16 25)' : 'inherit' }}> · {due.count}</span> : null}</> },
             // Host-visible too: the calendar is their own leases and their own
             // follow-ups, scoped server-side.
             { id: 'calendar', label: 'Kalendar' },
             // Host-visible: a host reconciling their own bank statement sees
             // only their own leases in the match dropdown, scoped server-side
             // like everything else on this screen.
-            { id: 'bank', label: "Bank ko'chirmasi" },
+            { id: 'bank', label: 'Bank', title: "Bank ko'chirmasi" },
             ...(isPlatform ? [{ id: 'reminders', label: 'Eslatmalar' }, { id: 'blacklist', label: "Qora ro'yxat" }] : []),
           ].map((t) => {
             const on = tab === t.id;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{
-                padding: '11px 16px', border: 0, borderBottom: `2px solid ${on ? 'var(--g-brand)' : 'transparent'}`, cursor: 'pointer',
+              <button key={t.id} onClick={() => setTab(t.id)} title={t.title} style={{
+                padding: '11px 16px', border: 0, whiteSpace: 'nowrap', flexShrink: 0, borderBottom: `2px solid ${on ? 'var(--g-brand)' : 'transparent'}`, cursor: 'pointer',
                 background: 'transparent', color: on ? 'var(--g-ink)' : 'var(--g-ink-3)', font: `600 13.5px ${window.GO.font}`, marginBottom: -1,
               }}>{t.label}</button>
             );
           })}
           </div>
-          {/* Deliberately not tied to the active tab or the search box: the
-              file is the whole book, with a Guruh column telling joriy and
-              sobiq apart. */}
-          {(tab === 'current' || tab === 'former') && <ExportDebtorsBtn />}
         </div>
       )}
 
@@ -8634,6 +8631,12 @@ function DebtorsScreen({ search }) {
         })}
       </div>
 
+      {/* Deliberately not tied to the stage filter or the search box: the
+          file is the whole book, with a Guruh column telling joriy and sobiq
+          apart. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+        <ExportDebtorsBtn />
+      </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} onRow={setDetail}
         empty={stageFilter !== 'all' ? "Bu bosqichda qarzdor yo'q" : former ? "Sobiq ijarachilarda qarz yo'q 🎉" : "Qarzdorlik yo'q 🎉"} />
       </>
@@ -10092,7 +10095,7 @@ function PlatformTab() {
             font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)',
           }}>
             Bu haqiqiy mijozlarga xabar yuboradi{n.smsEnabled ? ' (SMS — pullik)' : ' (faqat Telegram)'}. Yoqishdan oldin{' '}
-            <b>Qarzdorlik → Eslatmalar</b> bo'limida kimga yuborilishini tekshiring.
+            <b>Undiruv → Eslatmalar</b> bo'limida kimga yuborilishini tekshiring.
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16, alignItems: 'center' }}>
@@ -10657,7 +10660,7 @@ const SECTION_META = {
   products:  { title: () => window.AT.navProducts,  sub: () => `${window.PRODUCTS.length} ta katalog mahsuloti · 4 toifa` },
   bookings:  { title: () => window.AT.navBookings,  sub: () => `${window.BOOKINGS.length} ta bandlov` },
   contracts: { title: () => "Shartnomalar", sub: () => "Ijara shartnomalari · uzaytirish va bekor qilish" },
-  debtors:   { title: () => "Qarzdorlik", sub: () => `${((window.DEBTORS || {}).totals || {}).debtorCount || 0} ta qarzdor mijoz` },
+  debtors:   { title: () => "Undiruv", sub: () => `${((window.DEBTORS || {}).totals || {}).debtorCount || 0} ta qarzdor mijoz` },
   hosts:     { title: () => window.AT.navHosts,     sub: () => `${window.HOSTS.length} ta mezbon` },
   buildings: { title: () => window.AT.navBuildings, sub: () => `${(window.BUILDINGS || []).length} ta bino` },
   companies: { title: () => "Kompaniyalar", sub: () => `${(window.COMPANIES || []).length} ta ijarachi kompaniya` },
