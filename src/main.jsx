@@ -6309,10 +6309,10 @@ function isoToday(offsetDays = 0) {
 // One form for both halves: what happened, and what happens next. The
 // follow-up date and the promise are optional, so the common case (log a call)
 // stays two fields.
-function DebtNoteForm({ bookingId, onDone, onCancel }) {
+function DebtNoteForm({ bookingId, onDone, onCancel, defaultDue = '' }) {
   const isPlatform = (api.currentUser() || {}).role === 'platform';
   const [f, setF] = React.useState({
-    kind: 'call', body: '', dueAt: '', promisedAmount: '', promisedDate: '', pinned: false, internal: false,
+    kind: 'call', body: '', dueAt: defaultDue, promisedAmount: '', promisedDate: '', pinned: false, internal: false,
   });
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -7068,53 +7068,317 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
   );
 }
 
-// ─── "Bugungi ishlar" ───────────────────────────────────────
-// The strip an operator actually works from. A month grid answers "what is
-// coming"; this answers "who do I call now", which is the question they open
-// the screen with.
-function WorklistStrip({ onOpen, version }) {
-  const [data, setData] = React.useState(null);
-  const load = React.useCallback(() => {
-    api.get('/debt-notes/worklist').then(setData).catch(() => setData({ items: [], count: 0, overdue: 0 }));
-  }, []);
-  React.useEffect(() => { load(); }, [load, version]);
+// ─── Ishlar ─────────────────────────────────────────────────
+// Every follow-up on the book, as its own tab. It used to be a strip pinned
+// above the debtors table — the same eight rows on both tabs, unfiltered, and
+// with nothing to do but tick one. Here it is a work queue: bucketed by when
+// it is due, filtered by group/kind/source, actionable in bulk.
+//
+// Dates are compared as calendar days (yyyy-mm-dd), the same way the server
+// draws "overdue": a task due earlier today is today's work, not a missed day.
+const dayKey = (iso) => {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const dayDiff = (a, b) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
 
-  const done = async (id) => {
-    try { await api.post(`/debt-notes/${id}/done`, { done: true }); load(); }
-    catch (e) { window.alert(e.message); }
+const TASK_BUCKETS = [
+  { k: 'overdue',  label: 'Kechikkan', hue: 25,  test: (d) => d < 0 },
+  { k: 'today',    label: 'Bugun',     hue: 250, test: (d) => d === 0 },
+  { k: 'tomorrow', label: 'Ertaga',    hue: 200, test: (d) => d === 1 },
+  { k: 'week',     label: 'Shu hafta', hue: 155, test: (d) => d >= 2 && d <= 7 },
+  { k: 'later',    label: 'Keyinroq',  hue: 280, test: (d) => d > 7 },
+];
+const TASK_PAGE = 100;
+
+// The date picker behind "Ko'chirish": three presets that cover nearly every
+// case, plus an exact date.
+function RescheduleMenu({ onPick, label = "Ko'chirish", kind = 'quiet' }) {
+  const [open, setOpen] = React.useState(false);
+  const [date, setDate] = React.useState('');
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  const pick = (iso) => { setOpen(false); setDate(''); onPick(iso); };
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
+      <Btn kind={kind} sm onClick={() => setOpen((o) => !o)}><IconCal size={13} /> {label}</Btn>
+      {open && (
+        <div style={{
+          position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 30, width: 240, padding: 10,
+          background: 'var(--g-card)', border: '1px solid var(--g-line)', borderRadius: 12,
+          boxShadow: '0 8px 24px rgba(0,0,0,.12)', display: 'flex', flexDirection: 'column', gap: 4,
+        }}>
+          {[{ d: 1, l: 'Ertaga' }, { d: 3, l: '3 kundan keyin' }, { d: 7, l: 'Bir haftadan keyin' }].map((o) => (
+            <button key={o.d} onClick={() => pick(isoToday(o.d))} style={{
+              textAlign: 'left', border: 0, background: 'transparent', cursor: 'pointer', borderRadius: 8,
+              padding: '6px 8px', font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)',
+            }}>{o.l} <span style={{ color: 'var(--g-ink-4)' }}>· {fmtDate(isoToday(o.d))}</span></button>
+          ))}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', borderTop: '1px solid var(--g-line)', paddingTop: 8, marginTop: 2 }}>
+            <DateField value={date} onChange={setDate} min={isoToday()} style={{ flex: 1 }} />
+            <Btn kind="primary" sm disabled={!date} onClick={() => date && pick(date)}>OK</Btn>
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
+function TasksPanel({ search, rows, onOpen, version, onChanged }) {
+  const [status, setStatus] = React.useState('open'); // open | done
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  // 'due' = overdue + today, the default view; 'all'; or one TASK_BUCKETS key.
+  const [bucket, setBucket] = React.useState('due');
+  const [group, setGroup] = React.useState('all');
+  const [kind, setKind] = React.useState('all');
+  const [source, setSource] = React.useState('all');
+  const [q, setQ] = React.useState('');
+  const [sel, setSel] = React.useState(() => new Set());
+  const [limit, setLimit] = React.useState(TASK_PAGE);
+  const [busy, setBusy] = React.useState(false);
+  const [adding, setAdding] = React.useState(false);
+  const [newFor, setNewFor] = React.useState('');
+
+  const load = React.useCallback(() => {
+    setErr(null);
+    api.get(`/debt-notes/tasks?status=${status}`)
+      .then((r) => { setData(r); setSel(new Set()); })
+      .catch((e) => setErr(e?.message || "Yuklab bo'lmadi"));
+  }, [status]);
+  React.useEffect(() => { setData(null); load(); }, [load, version]);
+  React.useEffect(() => { setLimit(TASK_PAGE); setSel(new Set()); }, [status, bucket, group, kind, source, q, search]);
+
+  const today = isoToday();
+  const items = (data?.items || []).map((t) => ({ ...t, diff: dayDiff(dayKey(t.dueAt), today) }));
+  // Outstanding from the debtors list, when the lease is on it — the amount in
+  // an auto task's text is from the day it was written.
+  const owed = React.useMemo(() => new Map((rows || []).map((r) => [r.bookingId, r.outstanding])), [rows]);
+
+  // Every filter except the bucket, so the bucket counts answer "how many of
+  // THESE are overdue" rather than counting the whole book.
+  const needle = `${search || ''} ${q}`.trim().toLowerCase();
+  const filtered = items.filter((t) =>
+    (group === 'all' || t.group === group)
+    && (kind === 'all' || t.kind === kind)
+    && (source === 'all' || (source === 'auto') === t.auto)
+    && (!needle || needle.split(/\s+/).every((w) => `${t.company || ''} ${t.customer} ${t.place} ${t.body} ${t.phone || ''}`.toLowerCase().includes(w))));
+  const counts = TASK_BUCKETS.reduce((acc, b) => { acc[b.k] = filtered.filter((t) => b.test(t.diff)).length; return acc; }, {});
+  const shown = status === 'done' || bucket === 'all' ? filtered
+    : bucket === 'due' ? filtered.filter((t) => t.diff <= 0)
+    : filtered.filter((t) => TASK_BUCKETS.find((b) => b.k === bucket).test(t.diff));
+  const page = shown.slice(0, limit);
+
+  // One section per day. Open tasks come oldest-first, so the longest-ignored
+  // one is at the top; done ones newest-first.
+  const sections = [];
+  for (const t of page) {
+    const k = dayKey(status === 'done' ? t.doneAt : t.dueAt);
+    const last = sections[sections.length - 1];
+    if (last && last.k === k) last.items.push(t); else sections.push({ k, items: [t] });
+  }
+  const dayTitle = (k) => {
+    if (status === 'done') return k === today ? 'Bugun bajarilgan' : `${fmtDate(k)} da bajarilgan`;
+    const d = dayDiff(k, today);
+    if (d === 0) return 'Bugun';
+    if (d === 1) return 'Ertaga';
+    if (d < 0) return `${fmtDate(k)} — ${-d} kun kechikkan`;
+    return fmtDate(k);
   };
 
-  if (!data || !data.count) return null;
+  const act = async (fn) => {
+    setBusy(true);
+    try { await fn(); load(); onChanged && onChanged(); }
+    catch (e) { window.alert(e.message); }
+    finally { setBusy(false); }
+  };
+  const markDone = (ids, done = true) => act(() => api.post('/debt-notes/tasks/done', { ids, done }));
+  const move = (ids, iso) => act(() => api.post('/debt-notes/tasks/reschedule', { ids, dueAt: new Date(`${iso}T00:00:00Z`).toISOString() }));
+
+  const toggle = (id) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allOnPage = page.length > 0 && page.every((t) => sel.has(t.id));
+  const toggleAll = () => setSel(allOnPage ? new Set() : new Set(page.map((t) => t.id)));
+  const selected = [...sel];
+
+  const pill = (active, onClick, children) => (
+    <button onClick={onClick} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 12px', borderRadius: 999, cursor: 'pointer',
+      border: '1px solid', borderColor: active ? 'var(--g-ink)' : 'var(--g-line)',
+      background: active ? 'var(--g-ink)' : 'var(--g-card)', color: active ? '#fff' : 'var(--g-ink-2)',
+      font: `600 12px ${window.GO.font}`, transition: 'all .14s',
+    }}>{children}</button>
+  );
+  const filterSelect = (value, onChange, options) => (
+    <select className="adm-select" value={value} onChange={(e) => onChange(e.target.value)} style={{ minWidth: 130 }}>
+      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  );
+
+  // Leases a new task can hang off: everyone on the debtors list, plus anyone
+  // else with a live booking — a follow-up is not only for people in arrears.
+  const leaseChoices = React.useMemo(() => {
+    const seen = new Map();
+    for (const r of rows || []) seen.set(r.bookingId, `${r.company?.name || r.customer} — ${r.building} · ${r.unit}`);
+    for (const b of window.BOOKINGS || []) {
+      if (seen.has(b.id) || !['active', 'confirmed'].includes(b.status)) continue;
+      seen.set(b.id, `${b.companyRef?.name || b.customer} — ${b.unit?.offering?.building?.name || ''} · ${b.unit?.name || ''}`);
+    }
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [rows]);
+  const closeAdd = () => { setAdding(false); setNewFor(''); };
+
   return (
-    <div style={{
-      border: '1px solid oklch(0.86 0.06 250)', background: 'oklch(0.98 0.015 250)',
-      borderRadius: 12, padding: '12px 14px', marginBottom: 16,
-    }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', font: `600 13px ${window.GO.font}`, color: 'oklch(0.4 0.1 260)' }}>
-        <IconClock size={16} />
-        Bugungi ishlar · {data.count} ta
-        {data.overdue > 0 && <span style={{ color: 'oklch(0.5 0.16 25)' }}>({data.overdue} tasi kechikkan)</span>}
-      </div>
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {data.items.slice(0, 8).map((i) => (
-          <div key={i.id} style={{ display: 'flex', gap: 10, alignItems: 'baseline', justifyContent: 'space-between', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>
-            <span style={{ minWidth: 0 }}>
-              <b style={{ color: i.overdue ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)' }}>{fmtDate(i.dueAt)}</b>
-              {' — '}
-              <button onClick={() => onOpen(i.bookingId)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: 'inherit', color: 'var(--g-brand-ink)', textDecoration: 'underline' }}>
-                {i.company || i.customer}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* When — the bucket cards double as the primary filter. */}
+      {status === 'open' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12 }}>
+          {TASK_BUCKETS.map((b) => {
+            const on = bucket === b.k || (bucket === 'due' && (b.k === 'overdue' || b.k === 'today'));
+            return (
+              <button key={b.k} onClick={() => setBucket(bucket === b.k ? 'due' : b.k)} style={{
+                textAlign: 'left', cursor: 'pointer', padding: '12px 14px', borderRadius: 12,
+                border: `1px solid ${on ? `oklch(0.6 0.16 ${b.hue})` : 'var(--g-line)'}`,
+                background: on ? `oklch(0.97 0.03 ${b.hue})` : 'var(--g-card)',
+              }}>
+                <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)' }}>{b.label}</div>
+                <div style={{ font: `700 22px ${window.GO.font}`, color: b.k === 'overdue' && counts[b.k] ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)', marginTop: 2 }}>{counts[b.k]}</div>
               </button>
-              {' · '}{i.body}
-            </span>
-            <Btn kind="quiet" sm onClick={() => done(i.id)} style={{ flexShrink: 0 }}><IconCheck2 size={13} /> Bajarildi</Btn>
-          </div>
-        ))}
-        {data.count > 8 && (
-          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-            va yana {data.count - 8} ta — Kalendar bo'limida.
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        {pill(status === 'open', () => setStatus('open'), 'Ochiq')}
+        {pill(status === 'done', () => setStatus('done'), 'Bajarilgan · 30 kun')}
+        {status === 'open' && pill(bucket === 'all', () => setBucket(bucket === 'all' ? 'due' : 'all'), 'Barcha sanalar')}
+        <span style={{ width: 1, height: 22, background: 'var(--g-line)', margin: '0 4px' }} />
+        {filterSelect(group, setGroup, [['all', 'Barcha ijarachilar'], ['current', 'Joriy'], ['former', 'Sobiq']])}
+        {filterSelect(kind, setKind, [['all', 'Barcha turlar'], ...Object.entries(NOTE_KINDS).map(([k, v]) => [k, v.label])])}
+        {filterSelect(source, setSource, [['all', 'Avto va qo\'lda'], ['auto', 'Avtomatik'], ['manual', "Qo'lda"]])}
+        <input className="adm-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Qidirish…" style={{ width: 200 }} />
+        <div style={{ flex: 1 }} />
+        <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Yangi ish</Btn>
+      </div>
+
+      {/* Bulk bar — only with a selection, so it never competes with the list. */}
+      {sel.size > 0 && (
+        <div style={{
+          display: 'flex', gap: 10, alignItems: 'center', padding: '8px 12px', borderRadius: 12,
+          background: 'var(--g-bg-2)', border: '1px solid var(--g-line)', position: 'sticky', top: 0, zIndex: 5,
+        }}>
+          <b style={{ font: `600 13px ${window.GO.font}` }}>{sel.size} ta tanlandi</b>
+          <div style={{ flex: 1 }} />
+          {status === 'open' ? (
+            <>
+              <RescheduleMenu kind="ghost" onPick={(iso) => move(selected, iso)} />
+              <Btn kind="primary" sm disabled={busy} onClick={() => markDone(selected)}><IconCheck2 size={13} /> Bajarildi</Btn>
+            </>
+          ) : (
+            <Btn kind="ghost" sm disabled={busy} onClick={() => markDone(selected, false)}><IconRefresh size={13} /> Qayta ochish</Btn>
+          )}
+          <Btn kind="quiet" sm onClick={() => setSel(new Set())}>Bekor qilish</Btn>
+        </div>
+      )}
+
+      <Card pad={0}>
+        {err && <div style={{ padding: 16, font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
+        {!data && !err && <div style={{ padding: 16, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>}
+        {data && !shown.length && (
+          <div style={{ padding: 28, textAlign: 'center', font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+            {status === 'done' ? "So'nggi 30 kunda bajarilgan ish yo'q." : bucket === 'due' ? 'Bugunga ish qolmadi 🎉' : "Bu filtrda ish yo'q."}
           </div>
         )}
-      </div>
+        {page.length > 0 && (
+          <label style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--g-line)', font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={allOnPage} onChange={toggleAll} />
+            Hammasini tanlash ({page.length})
+            <span style={{ marginLeft: 'auto', fontWeight: 400 }}>{shown.length} ta ish</span>
+          </label>
+        )}
+        {sections.map((s) => (
+          <div key={s.k}>
+            <div style={{
+              padding: '8px 16px', background: 'var(--g-bg)', borderBottom: '1px solid var(--g-line)',
+              font: `700 12px ${window.GO.font}`,
+              color: status === 'open' && dayDiff(s.k, today) < 0 ? 'oklch(0.5 0.16 25)' : 'var(--g-ink-2)',
+            }}>{dayTitle(s.k)} <span style={{ fontWeight: 500, color: 'var(--g-ink-4)' }}>· {s.items.length}</span></div>
+            {s.items.map((t) => {
+              const meta = NOTE_KINDS[t.kind] || NOTE_KINDS.note;
+              const debt = owed.get(t.bookingId);
+              return (
+                <div key={t.id} style={{
+                  display: 'flex', gap: 12, alignItems: 'flex-start', padding: '11px 16px',
+                  borderBottom: '1px solid var(--g-line)', background: sel.has(t.id) ? 'var(--g-bg-2)' : 'transparent',
+                }}>
+                  <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggle(t.id)} style={{ marginTop: 3 }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button onClick={() => onOpen(t.bookingId)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: `600 13.5px ${window.GO.font}`, color: 'var(--g-brand-ink)' }}>
+                        {t.company || t.customer}
+                      </button>
+                      <Chip hue={meta.hue}>{meta.label}</Chip>
+                      {t.auto && <Chip hue={280} title="Undiruv tizimi yaratgan">Avto</Chip>}
+                      {t.group === 'former' && <Chip hue={25}>Sobiq</Chip>}
+                      {debt > 0 && <span style={{ font: `700 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>qarz {window.fmtSom(debt)} so'm</span>}
+                    </div>
+                    <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 3 }}>{t.body}</div>
+                    <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      <span>{t.place}</span>
+                      {t.phone && (
+                        <a href={`tel:+${t.phone}`} style={{ color: 'var(--g-ink-3)', textDecoration: 'none', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                          <IconPhone size={12} /> +{t.phone}
+                        </a>
+                      )}
+                      {status === 'done'
+                        ? <span>bajardi: {t.doneBy || '—'} · muddat {fmtDate(t.dueAt)}</span>
+                        : <span>muddat {fmtDate(t.dueAt)}</span>}
+                      {t.authorEmail && <span>yozdi: {t.authorEmail}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    {status === 'open' ? (
+                      <>
+                        <RescheduleMenu onPick={(iso) => move([t.id], iso)} />
+                        <Btn kind="ghost" sm disabled={busy} onClick={() => markDone([t.id])}><IconCheck2 size={13} /> Bajarildi</Btn>
+                      </>
+                    ) : (
+                      <Btn kind="quiet" sm disabled={busy} onClick={() => markDone([t.id], false)}><IconRefresh size={13} /> Qayta ochish</Btn>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+        {shown.length > limit && (
+          <div style={{ padding: 12, textAlign: 'center' }}>
+            <Btn kind="ghost" sm onClick={() => setLimit((l) => l + TASK_PAGE)}>Yana ko'rsatish ({shown.length - limit})</Btn>
+          </div>
+        )}
+      </Card>
+
+      <GoModal open={adding} onClose={closeAdd} title="Yangi ish" width={620}>
+        {adding && (
+          <>
+            <div style={{ font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 5 }}>Ijarachi</div>
+            <select className="adm-select" value={newFor} onChange={(e) => setNewFor(e.target.value)} style={{ width: '100%', marginBottom: 12 }}>
+              <option value="">— tanlang —</option>
+              {leaseChoices.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+            {newFor && (
+              <DebtNoteForm key={newFor} bookingId={newFor} defaultDue={isoToday(1)}
+                onCancel={closeAdd}
+                onDone={() => { closeAdd(); load(); onChanged && onChanged(); }} />
+            )}
+          </>
+        )}
+      </GoModal>
     </div>
   );
 }
@@ -8126,9 +8390,14 @@ function DebtorsScreen({ search }) {
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
   const [blacklisting, setBlacklisting] = React.useState(null); // former debtor → blacklist modal
   const [detail, setDetail] = React.useState(null); // debtor row → collection drawer
-  // Bumped whenever a note changes, so the worklist strip reloads without
-  // waiting for a full bootstrap.
+  // Bumped whenever a note changes, so the Ishlar tab and its count reload
+  // without waiting for a full bootstrap.
   const [noteVersion, setNoteVersion] = React.useState(0);
+  // Due-now count (overdue + today) for the Ishlar tab label.
+  const [due, setDue] = React.useState(null);
+  React.useEffect(() => {
+    api.get('/debt-notes/worklist').then(setDue).catch(() => setDue(null));
+  }, [noteVersion]);
   // Two separate collection problems, never mixed: tenants still in the space
   // (chase with a reminder) and tenants who left owing money (a legal matter).
   const [tab, setTab] = React.useState('current');
@@ -8278,6 +8547,8 @@ function DebtorsScreen({ search }) {
             // opposite job: nobody is chased, but a credit on a finished lease
             // is a refund waiting to be paid back.
             { id: 'prepaid', label: `Oldindan to'lovlar${totals.prepaidCount ? ` · ${totals.prepaidCount}` : ''}` },
+            // Follow-ups due now — the count turns red once a day has been missed.
+            { id: 'tasks', label: <>Ishlar{due?.count ? <span style={{ color: due.overdue ? 'oklch(0.5 0.16 25)' : 'inherit' }}> · {due.count}</span> : null}</> },
             // Host-visible too: the calendar is their own leases and their own
             // follow-ups, scoped server-side.
             { id: 'calendar', label: 'Kalendar' },
@@ -8307,9 +8578,9 @@ function DebtorsScreen({ search }) {
        tab === 'reminders' && isPlatform ? <RemindersPanel /> :
        tab === 'bank' ? <BankStatementPanel /> :
        tab === 'prepaid' ? <PrepaidPanel rows={prepaidRows} onRow={setDetail} /> :
-       tab === 'calendar' ? <DebtCalendarPanel onOpen={openBooking} /> : (
+       tab === 'calendar' ? <DebtCalendarPanel onOpen={openBooking} /> :
+       tab === 'tasks' ? <TasksPanel search={search} rows={data.rows} onOpen={openBooking} version={noteVersion} onChanged={() => setNoteVersion((v) => v + 1)} /> : (
       <>
-      <WorklistStrip onOpen={openBooking} version={noteVersion} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 18 }}>
         <MoneyStatCard icon={<IconWarn size={17} />} label={former ? 'Undirilmagan qarz' : 'Jami qarz'} value={window.fmtCompactSom(groupTotals.outstanding)} color="oklch(0.5 0.16 25)" />
@@ -9187,7 +9458,7 @@ function PayoutStatementsPanel({ role }) {
 
 Object.assign(window, {
   AgentStatementsPanel, GoModal, PaymentForm, ChargeForm, BookingMoneySections, DebtorsScreen,
-  DebtNotesPanel, DebtNoteForm, DebtDetailDrawer, DebtCalendarPanel, WorklistStrip,
+  DebtNotesPanel, DebtNoteForm, DebtDetailDrawer, DebtCalendarPanel, TasksPanel,
   ContractsScreen, ContractDetailDrawer, ContractRenewModal,
   PayoutStatementsPanel, StatementDetailDrawer,
 });
