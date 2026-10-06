@@ -5133,7 +5133,22 @@ function InvoicesScreen({ search }) {
     ) },
     { key: 'actions', label: '', align: 'right', render: (inv) => {
       if (inv.status === 'ready_to_sign') {
-        return <Btn kind="primary" sm disabled={busy} onClick={() => signInvoices([inv])}><IconShieldCheck size={14} /> {signingIds.has(inv.id) ? 'Imzolanmoqda…' : 'E-IMZO bilan imzolash'}</Btn>;
+        // Rebuild the draft from current data — after fixing what didox
+        // rejected (address, soliq number). The old draft cannot be deleted
+        // from here, and signing it in didox would file a second ESF.
+        const regenerate = () => {
+          if (!window.confirm(
+            "Hisob-faktura joriy ma'lumotlar (kompaniya, shartnoma) bilan qayta yaratiladi va didox'da yangi qoralama ochiladi.\n\n" +
+            "Eski qoralamani didox'da o'chiring — uni imzolab bo'lmaydi, aks holda ikkita ESF yuboriladi.",
+          )) return;
+          gorentMutate(() => api.post(`/invoices/${inv.id}/regenerate`));
+        };
+        return (
+          <div style={{ display: 'inline-flex', gap: 6 }}>
+            <Btn kind="ghost" sm disabled={busy} onClick={regenerate}><IconRefresh size={14} /> Qayta yaratish</Btn>
+            <Btn kind="primary" sm disabled={busy} onClick={() => signInvoices([inv])}><IconShieldCheck size={14} /> {signingIds.has(inv.id) ? 'Imzolanmoqda…' : 'E-IMZO bilan imzolash'}</Btn>
+          </div>
+        );
       }
       if (inv.status === 'error') {
         return <Btn kind="ghost" sm disabled={busy} onClick={() => gorentMutate(() => api.post('/invoices/generate', { period: inv.period }))}><IconRefresh size={14} /> Qayta urinish</Btn>;
