@@ -5001,6 +5001,18 @@ const INVOICE_STATUS = {
   sent:          { label: "Yuborilgan", hue: 155 },
   error:         { label: "Xatolik", hue: 25 },
 };
+// didox's own status for the document (doc_status), read back by the daily
+// sync or «Holatni yangilash». Shown under our status, not instead of it.
+const DIDOX_DOC_STATUS = {
+  0: { label: "didox: qoralama", tone: 'var(--g-ink-4)' },
+  1: { label: "didox: xaridor imzosi kutilmoqda", tone: 'oklch(0.55 0.12 70)' },
+  2: { label: "didox: bizning imzo kutilmoqda", tone: 'oklch(0.55 0.12 70)' },
+  3: { label: "didox: imzolangan", tone: 'oklch(0.5 0.13 155)' },
+  4: { label: "didox: xaridor rad etdi", tone: 'oklch(0.55 0.18 25)' },
+  40: { label: "didox: haqiqiy emas", tone: 'oklch(0.55 0.18 25)' },
+};
+const invoiceRejected = (inv) => inv.didoxStatus === 4 || inv.didoxStatus === 40;
+
 // Payment status derived from invoice.payments (Σ amount vs invoice.amount).
 const INVOICE_PAY_STATUS = {
   unpaid:  { label: "To'lanmagan", hue: 25 },
@@ -5060,6 +5072,18 @@ function InvoicesScreen({ search }) {
     setGenerating(true);
     await gorentMutate(() => api.post('/invoices/generate', { period }));
     setGenerating(false);
+  };
+
+  // Read didox's status back now, rather than waiting for the 09:00 run.
+  const [syncing, setSyncing] = React.useState(false);
+  const syncStatus = async () => {
+    setSyncing(true);
+    try {
+      const r = await api.post('/invoices/didox-sync', {});
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      window.alert(`${r.checked} ta tekshirildi, ${r.changed} ta o'zgardi${r.failed ? `, ${r.failed} ta o'qilmadi` : ''}`);
+    } catch (e) { window.alert(e?.message || "Holatlar yangilanmadi"); }
+    setSyncing(false);
   };
 
   // Signs one or many drafts in a single E-IMZO session: the agent + key are
@@ -5129,6 +5153,13 @@ function InvoicesScreen({ search }) {
       <div>
         <StatusPill s={inv.status} dict={INVOICE_STATUS} size="sm" />
         {inv.status === 'error' && inv.error && <div style={{ font: `400 11px ${window.GO.font}`, color: 'oklch(0.55 0.18 25)', marginTop: 4, maxWidth: 240 }}>{inv.error}</div>}
+        {inv.didoxStatus != null && (
+          <div title={inv.didoxCheckedAt ? `Tekshirildi: ${new Date(inv.didoxCheckedAt).toLocaleString()}` : undefined}
+            style={{ font: `500 11px ${window.GO.font}`, color: (DIDOX_DOC_STATUS[inv.didoxStatus] || {}).tone || 'var(--g-ink-4)', marginTop: 4, maxWidth: 240 }}>
+            {(DIDOX_DOC_STATUS[inv.didoxStatus] || { label: `didox: ${inv.didoxStatus}` }).label}
+            {inv.didoxComment && <span style={{ color: 'var(--g-ink-3)' }}> — {inv.didoxComment}</span>}
+          </div>
+        )}
       </div>
     ) },
     { key: 'actions', label: '', align: 'right', render: (inv) => {
@@ -5153,6 +5184,14 @@ function InvoicesScreen({ search }) {
       if (inv.status === 'error') {
         return <Btn kind="ghost" sm disabled={busy} onClick={() => gorentMutate(() => api.post('/invoices/generate', { period: inv.period }))}><IconRefresh size={14} /> Qayta urinish</Btn>;
       }
+      // Refused by the buyer (or invalidated) in didox: fix the data, then send a new one.
+      if (invoiceRejected(inv)) {
+        const again = () => {
+          if (!window.confirm("Xaridor rad etgan hisob-faktura joriy ma'lumotlar bilan qayta yaratiladi va didox'da yangi qoralama ochiladi. Avval rad etish sababini tuzating.")) return;
+          gorentMutate(() => api.post(`/invoices/${inv.id}/regenerate`));
+        };
+        return <Btn kind="ghost" sm disabled={busy} onClick={again}><IconRefresh size={14} /> Qayta yaratish</Btn>;
+      }
       return null;
     } },
   ];
@@ -5165,6 +5204,7 @@ function InvoicesScreen({ search }) {
           <input className="adm-input" style={{ width: 130 }} value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="2026-06" />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <Btn kind="ghost" sm disabled={syncing || busy} onClick={syncStatus}><IconRefresh size={15} /> {syncing ? 'Tekshirilmoqda…' : 'Holatni yangilash'}</Btn>
           <Btn kind="ghost" sm disabled={previewBusy || busy} onClick={loadPreview}><IconEye size={15} /> {previewBusy ? 'Yuklanmoqda…' : 'Oy yakuni'}</Btn>
           <Btn kind="primary" sm disabled={generating || busy} onClick={generate}><IconDoc size={15} /> {generating ? 'Yaratilmoqda…' : "Oylik hisob-fakturalarni yaratish"}</Btn>
         </div>
