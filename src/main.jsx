@@ -1272,6 +1272,7 @@ const IconPhone   = (p) => <AIco {...p} d="M5 4h4l2 5-3 2a11 11 0 0 0 5 5l2-3 5 
 const IconArrowUp = (p) => <AIco {...p} d="M12 19V5 M6 11l6-6 6 6" />;
 const IconRefresh = (p) => <AIco {...p} d="M4 12a8 8 0 0 1 13.7-5.7L20 8 M20 3.5V8h-4.5 M20 12a8 8 0 0 1-13.7 5.7L4 16 M4 20.5V16h4.5" />;
 const IconLink    = (p) => <AIco {...p} d="M9.5 14.5l5-5 M9 7l1.2-1.2a3.5 3.5 0 0 1 5 5L15 12 M15 17l-1.2 1.2a3.5 3.5 0 0 1-5-5L10 12" />;
+const IconInbox   = (p) => <AIco {...p} d="M4 13h4l2 3h4l2-3h4 M6 5h12l2 8v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-6z" />;
 const IconDoc     = (p) => <AIco {...p} d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z M14 3v5h5 M9 13h6M9 17h4" />;
 const IconShieldCheck = (p) => <AIco {...p} d="M12 3l8 3v6c0 5-3.5 8.5-8 9-4.5-.5-8-4-8-9V6l8-3z M8.5 12l2.5 2.5L16 9.5" />;
 const IconWarn    = (p) => <AIco {...p} d="M12 3.5L2.5 20h19L12 3.5z M12 10v4.5 M12 17.5h.01" />;
@@ -1585,6 +1586,7 @@ const NAV = [
   { id: 'products',  label: () => window.AT.navProducts,  icon: IconBox },
   { id: 'bookings',  label: () => window.AT.navBookings,  icon: IconCal },
   { id: 'contracts', label: () => "Shartnomalar",          icon: IconDoc },
+  { id: 'requests',  label: () => "Arizalar",              icon: IconInbox },
   { id: 'debtors',   label: () => "Undiruv",               icon: IconWarn },
   // Both endpoints are @Roles('platform') — bootstrap() already skips fetching
   // them for anyone else, so a host or a broker clicking these landed on an
@@ -1628,7 +1630,7 @@ function BrandLink({ setRoute, children }) {
 }
 
 function Sidebar({ route, setRoute, role, counts }) {
-  const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
+  const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0, requests: (window.REQUEST_COUNTS || {}).total || 0 };
   return (
     <div style={{
       width: 244, flexShrink: 0, background: 'var(--g-brand-deep)', color: '#fff',
@@ -1708,7 +1710,7 @@ function NotificationsBell({ onNavigate }) {
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
-  const icons = { box: <IconBox size={16} />, cal: <IconCal size={16} />, flag: <IconFlag size={16} />, wallet: <IconWallet size={16} />, user: <IconUser size={16} /> };
+  const icons = { box: <IconBox size={16} />, cal: <IconCal size={16} />, flag: <IconFlag size={16} />, wallet: <IconWallet size={16} />, user: <IconUser size={16} />, inbox: <IconInbox size={16} /> };
   const markAll = () => { setNotifs((s) => s.map((n) => ({ ...n, unread: false }))); api.post('/notifications/read-all').catch(() => {}); };
   const open1 = (n) => { setNotifs((s) => s.map((x) => x.id === n.id ? { ...x, unread: false } : x)); api.patch(`/notifications/${n.id}/read`).catch(() => {}); setOpen(false); onNavigate && onNavigate(n.section); };
 
@@ -4671,6 +4673,183 @@ function RevenueScreen({ search, role }) {
 }
 
 // ═══ COMPANIES (ijarachi kompaniyalar) ═════════════════════
+// ============================================================
+// Arizalar — requests filed in the Telegram bot
+// ============================================================
+// Two queues: people asking to rent (leads) and tenants asking to leave
+// (cancellations). The bot only files them; the decision is made here, and the
+// person is told the outcome in the bot. Approving a lead creates the tenant
+// company (platform only); approving a cancellation moves the lease end to
+// request day + 30 through the same end-early path as the booking drawer.
+const REQUEST_STATUS = {
+  new:      { label: 'Yangi',          hue: 250 },
+  approved: { label: 'Tasdiqlangan',   hue: 155 },
+  rejected: { label: 'Rad etilgan',    hue: 25 },
+};
+const CANCEL_OUTCOME = {
+  ended_early: 'Ijara muddati qisqartirildi',
+  cancelled: 'Bandlov bekor qilindi',
+  ends_anyway: "O'z muddatida tugaydi",
+};
+
+function fmtLastDay(exclusiveEnd) {
+  return exclusiveEnd ? fmtDate(endMinusDay(exclusiveEnd)) : '—';
+}
+
+function RequestsScreen({ search }) {
+  const [tab, setTab] = React.useState('leads');
+  const [status, setStatus] = React.useState('new');
+  const [rows, setRows] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [busy, setBusy] = React.useState(null); // id being acted on
+  const platform = (api.currentUser() || {}).role === 'platform';
+
+  const load = React.useCallback(async () => {
+    setErr(null);
+    try {
+      const path = tab === 'leads' ? '/requests/leads' : '/requests/cancellations';
+      setRows(await api.get(status === 'all' ? path : `${path}?status=${status}`));
+    } catch (e) {
+      setErr(e.message || "Arizalarni yuklab bo'lmadi");
+      setRows([]);
+    }
+  }, [tab, status]);
+  React.useEffect(() => { setRows(null); load(); }, [load]);
+
+  const act = async (id, path, body) => {
+    setBusy(id);
+    try {
+      await api.post(path, body || {});
+      if (window.__gorentRefresh) await window.__gorentRefresh();
+      await load();
+    } catch (e) {
+      window.alert(e && e.message ? e.message : "Amalni bajarib bo'lmadi");
+    } finally {
+      setBusy(null);
+    }
+  };
+  const reject = (id, base) => {
+    // The reason goes to the person in the bot, so it is asked for, not assumed.
+    const note = window.prompt("Rad etish sababi (arizachiga yuboriladi, ixtiyoriy):", '');
+    if (note === null) return;
+    act(id, `${base}/${id}/reject`, { note });
+  };
+  const openFile = async (leadId, f) => {
+    try {
+      const url = await api.fileBlobUrl(`/requests/leads/${leadId}/files/${f.id}`);
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      window.alert(e.message || "Faylni ochib bo'lmadi");
+    }
+  };
+
+  let list = rows || [];
+  if (search) {
+    const q = search.toLowerCase();
+    list = list.filter((r) => JSON.stringify([r.name, r.inn, r.pinfl, r.phone, r.code, r.booking?.customer, r.booking?.companyRef?.name, r.booking?.id]).toLowerCase().includes(q));
+  }
+
+  const muted = { font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' };
+  const strong = { font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' };
+  const actions = (r, base, canDecide, approveLabel, approveTitle) => r.status === 'new' && canDecide && (
+    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+      <Btn kind="primary" sm disabled={busy === r.id} title={approveTitle}
+        onClick={() => window.confirm(approveTitle + '\n\nDavom etasizmi?') && act(r.id, `${base}/${r.id}/approve`)}>
+        <IconCheck size={14} /> {approveLabel}
+      </Btn>
+      <Btn kind="ghost" sm disabled={busy === r.id} onClick={() => reject(r.id, base)}><IconX2 size={14} /> Rad etish</Btn>
+    </div>
+  );
+
+  const leadColumns = [
+    { key: 'code', label: '№', render: (r) => <span style={{ font: `600 12px ui-monospace, monospace`, color: 'var(--g-ink-2)' }}>{r.code}</span> },
+    { key: 'who', label: 'Arizachi', render: (r) => (
+      <div>
+        <div style={{ ...strong, display: 'flex', alignItems: 'center', gap: 7 }}>
+          {r.name}
+          {r.type === 'individual' && <span style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.5 0.1 200)', background: 'oklch(0.95 0.03 200)', padding: '1px 6px', borderRadius: 5 }}>YaTT</span>}
+          {r.blacklisted && <span title={r.blacklistReason || "Qora ro'yxatda"} style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.5 0.18 25)', background: 'oklch(0.95 0.05 25)', padding: '1px 6px', borderRadius: 5 }}>Qora ro'yxat</span>}
+        </div>
+        <div style={{ ...muted, fontFamily: 'ui-monospace, monospace' }}>{r.inn ? `INN ${r.inn}` : r.pinfl ? `PINFL ${r.pinfl}` : '—'}</div>
+        {r.director && <div style={muted}>Direktor: {r.director}</div>}
+      </div>
+    ) },
+    { key: 'contact', label: 'Aloqa', render: (r) => (
+      <div>
+        <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>+{r.phone}</div>
+        {(r.tgUsername || r.tgName) && <div style={muted}>{r.tgUsername ? `@${r.tgUsername}` : r.tgName}</div>}
+      </div>
+    ) },
+    { key: 'wish', label: 'Kerak', render: (r) => (
+      <div style={{ maxWidth: 260 }}>
+        <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{r.building?.name || 'Bino tanlanmagan'}</div>
+        <div style={{ ...muted, whiteSpace: 'normal' }}>{r.wish || '—'}</div>
+        {r.moveIn && <div style={muted}>{fmtDate(r.moveIn)} dan</div>}
+      </div>
+    ) },
+    { key: 'files', label: 'Hujjatlar', render: (r) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+        {(r.files || []).map((f) => (
+          <button key={f.id} onClick={() => openFile(r.id, f)} style={{ border: 0, background: 'none', padding: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, font: `500 12.5px ${window.GO.font}`, color: 'var(--g-brand-ink)' }}>
+            <IconDoc size={13} /> {f.kind === 'guvohnoma' ? 'Guvohnoma' : 'Pasport'}
+          </button>
+        ))}
+        {!(r.files || []).length && <span style={muted}>—</span>}
+      </div>
+    ) },
+    { key: 'when', label: 'Sana', render: (r) => (
+      <div>
+        <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{r.submittedAt ? fmtDate(r.submittedAt) : '—'}</div>
+        {r.status !== 'new' && <div style={{ marginTop: 4 }}><StatusPill s={r.status} dict={REQUEST_STATUS} size="sm" /></div>}
+        {r.company && <div style={muted}>→ {r.company.name}</div>}
+        {r.note && <div title={r.note} style={{ ...muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.note}</div>}
+      </div>
+    ) },
+    { key: 'act', label: '', align: 'right', render: (r) => actions(r, '/requests/leads', platform, 'Tasdiqlash',
+      `${r.code}: «${r.name}» ijarachi kompaniya sifatida qo'shiladi (INN/PINFL bo'yicha mavjud bo'lsa — unga bog'lanadi), hujjatlari ko'chiriladi.`) },
+  ];
+
+  const cancelColumns = [
+    { key: 'booking', label: 'Bandlov', render: (r) => (
+      <div>
+        <div style={strong}>{r.booking.companyRef?.name || r.booking.customer}</div>
+        <div style={muted}>{r.booking.unit.offering.building.name} · {r.booking.unit.name}</div>
+        <div style={{ ...muted, fontFamily: 'ui-monospace, monospace' }}>{r.booking.id}</div>
+      </div>
+    ) },
+    { key: 'term', label: 'Hozirgi muddat', render: (r) => <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{fmtDate(r.booking.start)} – {fmtLastDay(r.booking.end)}</span> },
+    { key: 'asked', label: "So'ralgan", render: (r) => <span style={{ font: `500 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{fmtDate(r.requestedAt)}</span> },
+    { key: 'last', label: 'Oxirgi kun (30 kun)', render: (r) => <span style={strong}>{fmtLastDay(r.effectiveEnd)}</span> },
+    { key: 'state', label: window.AT.status, render: (r) => (
+      <div>
+        <StatusPill s={r.status} dict={REQUEST_STATUS} size="sm" />
+        {r.outcome && <div style={{ ...muted, marginTop: 4 }}>{CANCEL_OUTCOME[r.outcome] || r.outcome}</div>}
+        {r.note && <div title={r.note} style={{ ...muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.note}</div>}
+      </div>
+    ) },
+    { key: 'act', label: '', align: 'right', render: (r) => actions(r, '/requests/cancellations', api.can('bookings', r.booking.unit.offering.building.hostId), 'Tasdiqlash',
+      `${r.booking.id}: ijara ${fmtLastDay(r.effectiveEnd)} gacha qisqartiriladi (boshlanmagan bo'lsa — bekor qilinadi). Oxirgi oy kunlar bo'yicha hisoblanadi.`) },
+  ];
+
+  const counts = window.REQUEST_COUNTS || {};
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+        <Segmented value={tab} onChange={setTab} options={[
+          { value: 'leads', label: `Ijara arizalari${counts.leads ? ` · ${counts.leads}` : ''}` },
+          { value: 'cancels', label: `Tugatish arizalari${counts.cancels ? ` · ${counts.cancels}` : ''}` },
+        ]} />
+        <StatusChips dict={REQUEST_STATUS} value={status} setValue={setStatus} />
+      </div>
+      {err && <div style={{ marginBottom: 12, font: `500 13px ${window.GO.font}`, color: 'oklch(0.5 0.18 25)' }}>{err}</div>}
+      {rows === null
+        ? <div style={{ padding: 40, textAlign: 'center', ...muted }}>Yuklanmoqda…</div>
+        : <DataTable columns={tab === 'leads' ? leadColumns : cancelColumns} rows={list} rowKey={(r) => r.id}
+            empty={tab === 'leads' ? "Telegram botdan ijara arizalari yo'q" : "Ijarani tugatish arizalari yo'q"} />}
+    </div>
+  );
+}
+
 const COMPANY_DOC = { sent: { label: 'Yuklangan', hue: 155 }, pending: { label: "Yo'q", hue: 35 } };
 
 function CompanyDocCell({ has, num }) {
@@ -4684,6 +4863,7 @@ function CompanyDocCell({ has, num }) {
 
 function CompaniesScreen({ search }) {
   const [editing, setEditing] = React.useState(null); // null | {} (new) | company (edit)
+  const [reconciling, setReconciling] = React.useState(null);
 
   let rows = window.COMPANIES || [];
   if (search) {
@@ -4724,7 +4904,12 @@ function CompaniesScreen({ search }) {
           </span>
         : <span style={{ color: 'var(--g-ink-4)' }}>—</span>
     ) },
-    { key: 'actions', label: '', align: 'right', render: (c) => <Btn kind="ghost" sm onClick={() => setEditing(c)}><IconEdit size={14} /> Tahrirlash</Btn> },
+    { key: 'actions', label: '', align: 'right', render: (c) => (
+      <div style={{ display: 'inline-flex', gap: 6 }}>
+        <Btn kind="ghost" sm onClick={() => setReconciling(c)}><IconDoc size={14} /> Solishtirma dalolatnoma</Btn>
+        <Btn kind="ghost" sm onClick={() => setEditing(c)}><IconEdit size={14} /> Tahrirlash</Btn>
+      </div>
+    ) },
   ];
 
   return (
@@ -4733,7 +4918,270 @@ function CompaniesScreen({ search }) {
         <Btn kind="primary" sm onClick={() => setEditing({})}><IconPlus size={15} /> Kompaniya qo'shish</Btn>
       </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty="Hozircha kompaniyalar yo'q" />
+      {reconciling && <ReconciliationDrawer company={reconciling} onClose={() => setReconciling(null)} />}
     </div>
+  );
+}
+
+// ── Kompaniyalar → Solishtirma dalolatnoma (akt sverki) ─────
+// One tenant's account over a period, per contract, sent through didox as doc
+// type 052 and signed with E-IMZO like an ESF. The figures are the server's
+// (see api/src/reconciliation/build.ts): rent and charges as they fell due,
+// payments as they came in — so the closing balance is the Qarzdorlik number.
+
+const ACT_STATUS = {
+  ready_to_sign: { label: 'Imzolanmagan', tone: 'oklch(0.55 0.13 70)' },
+  waiting: { label: 'Ijarachi imzosi kutilmoqda', tone: 'oklch(0.5 0.12 250)' },
+  signed: { label: 'Ikki tomon imzoladi', tone: 'oklch(0.5 0.13 155)' },
+  refused: { label: 'Rad etildi', tone: 'oklch(0.5 0.16 25)' },
+  sent: { label: 'Yuborildi', tone: 'oklch(0.5 0.12 250)' },
+};
+
+function actStatusKey(a) {
+  if (a.status === 'ready_to_sign') return 'ready_to_sign';
+  if (a.didoxStatus === 3) return 'signed';
+  if (a.didoxStatus === 4 || a.didoxStatus === 40) return 'refused';
+  if (a.didoxStatus === 1) return 'waiting';
+  return 'sent';
+}
+
+// Positive: the tenant owes us. Negative: they are in credit.
+function ActBalance({ n }) {
+  if (!n) return <span style={{ color: 'var(--g-ink-3)' }}>0</span>;
+  return n > 0
+    ? <span style={{ color: 'oklch(0.5 0.16 25)' }}>Qarz {window.fmtSom(n)}</span>
+    : <span style={{ color: 'oklch(0.5 0.13 155)' }}>Oldindan {window.fmtSom(-n)}</span>;
+}
+
+// Signs one act in the browser: same certificate choice as the ESF screen —
+// the key whose STIR is the company's, never just the first one listed.
+async function signReconciliationAct(act) {
+  const certs = await eimzo.listCertificates();
+  if (!certs.length) throw new Error('E-IMZO sertifikatlari topilmadi.');
+  const { stir } = await api.get('/didox/status');
+  if (!stir) throw new Error('Kompaniya STIR sozlanmagan (DIDOX_STIR) — imzolash mumkin emas.');
+  const cert = eimzo.pickCertificate(certs, stir).raw;
+  const { base64 } = await api.get(`/reconciliation/${act.id}/tosign`);
+  const signature = await eimzo.signBase64(base64, cert);
+  await api.post(`/reconciliation/${act.id}/sign`, { signature });
+}
+
+function ReconciliationDrawer({ company, onClose }) {
+  const today = isoToday();
+  const [from, setFrom] = React.useState(`${today.slice(0, 4)}-01-01`);
+  const [to, setTo] = React.useState(today);
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [fio, setFio] = React.useState('');
+  const [pinfl, setPinfl] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [note, setNote] = React.useState(null);
+  const [acts, setActs] = React.useState([]);
+
+  const loadActs = React.useCallback(async () => {
+    try { setActs(await api.get(`/reconciliation?companyId=${encodeURIComponent(company.id)}`)); } catch { /* the list is secondary */ }
+  }, [company.id]);
+
+  React.useEffect(() => { loadActs(); }, [loadActs]);
+
+  React.useEffect(() => {
+    if (!from || !to) return;
+    let live = true;
+    setLoading(true); setErr(null);
+    api.get(`/reconciliation/preview?companyId=${encodeURIComponent(company.id)}&from=${from}&to=${to}`)
+      .then((r) => {
+        if (!live) return;
+        setData(r);
+        // Pre-fill the tenant's signer once; never overwrite what was typed.
+        setFio((v) => v || r.partner.fizFio || '');
+        setPinfl((v) => v || r.partner.fizTin || '');
+      })
+      .catch((e) => { if (live) { setData(null); setErr(e?.message || 'Hisoblab bo‘lmadi'); } })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [company.id, from, to]);
+
+  // The server lists what stops a send; the two fields typed here are checked
+  // live, so the list shrinks as the operator fills them in.
+  const blockers = (data?.blockers || []).filter((b) => !/imzolovchi/.test(b));
+  if (!fio.trim()) blockers.push('Ijarachi tomonidan imzolovchining F.I.Sh. kiritilmagan.');
+  if (!/^\d{14}$/.test(pinfl.replace(/\D/g, ''))) blockers.push('Ijarachi imzolovchisining JSHSHIR (14 raqam) kiritilmagan.');
+
+  const sign = async (act) => {
+    setBusy(true); setNote(null);
+    try {
+      await signReconciliationAct(act);
+      setNote(`${act.number} imzolandi va ijarachiga yuborildi.`);
+    } catch (e) {
+      setNote(`${act.number} yaratildi, lekin imzolanmadi: ${e?.message || e}. Pastdagi ro‘yxatdan qayta imzolang.`);
+    }
+    await loadActs();
+    setBusy(false);
+  };
+
+  const send = async () => {
+    setBusy(true); setNote(null);
+    let act;
+    try {
+      act = await api.post('/reconciliation', { companyId: company.id, from, to, partnerFio: fio.trim(), partnerPinfl: pinfl.replace(/\D/g, '') });
+    } catch (e) {
+      setNote(e?.message || 'Didox’ga yuborilmadi');
+      setBusy(false);
+      return;
+    }
+    await sign(act);
+  };
+
+  const sync = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/reconciliation/sync', { companyId: company.id });
+      if (r.failed) setNote(`${r.failed} ta hujjat holati o‘qilmadi`);
+    } catch (e) { setNote(e?.message || 'Holat yangilanmadi'); }
+    await loadActs();
+    setBusy(false);
+  };
+
+  const act = data?.act;
+  const blocked = busy || loading || blockers.length > 0;
+  const th = { font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--g-line)' };
+  const td = { font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', padding: '6px 8px', borderBottom: '1px solid var(--g-line)', verticalAlign: 'top' };
+  const num = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
+  const muted = { font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' };
+  const signed = (n) => (n < 0 ? `−${window.fmtCompactSom(-n)}` : window.fmtCompactSom(n));
+
+  return (
+    <Drawer open onClose={onClose} width={760}>
+      <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--g-line)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ font: `700 16px ${window.GO.font}`, color: 'var(--g-ink)' }}>Solishtirma dalolatnoma</div>
+          <div style={{ ...muted, fontSize: 12.5, marginTop: 3 }}>{company.name} · {window.taxLabel(company) || '—'}</div>
+        </div>
+        <IconBtn title="Yopish" onClick={onClose}><IconClose size={16} /></IconBtn>
+      </div>
+
+      <div className="adm-scroll" style={{ padding: 22, overflowY: 'auto', flex: 1 }}>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
+          <div><FieldLabel>Davr boshi</FieldLabel><DateField value={from} onChange={setFrom} /></div>
+          <div><FieldLabel>Davr oxiri</FieldLabel><DateField value={to} onChange={setTo} /></div>
+          {loading && <span style={muted}>Hisoblanmoqda…</span>}
+        </div>
+
+        {err && <Card pad={14} style={{ marginBottom: 16, color: 'oklch(0.5 0.16 25)', font: `500 13px ${window.GO.font}` }}>{err}</Card>}
+
+        {act && (
+          <>
+            <Card pad={16} style={{ marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+                <MiniStat label="Boshlang‘ich qoldiq" value={signed(act.opening)} />
+                <MiniStat label="Hisoblangan (debet)" value={window.fmtCompactSom(act.debit)} />
+                <MiniStat label="To‘langan (kredit)" value={window.fmtCompactSom(act.credit)} />
+                <MiniStat label="Yakuniy qoldiq" value={signed(act.closing)} tone={act.closing > 0 ? 'bad' : act.closing < 0 ? 'good' : undefined} />
+              </div>
+              <div style={{ ...muted, marginTop: 10 }}>Musbat — ijarachi qarzi, manfiy — oldindan to‘lov. Yakuniy qoldiq Qarzdorlik ekranidagi raqam bilan bir xil.</div>
+            </Card>
+
+            {act.contracts.map((c) => (
+              <Card key={c.bookingId} pad={0} style={{ marginBottom: 16, overflow: 'hidden' }}>
+                <div style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', borderBottom: '1px solid var(--g-line)' }}>
+                  <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+                    Shartnoma №{c.contractNo} · {fmtDate(c.contractDate)}
+                    {c.noContract && <span style={{ ...muted, marginLeft: 8, color: 'oklch(0.55 0.13 70)' }}>shartnoma yo‘q — bandlov raqami ishlatiladi</span>}
+                  </div>
+                  <div style={{ font: `500 12.5px ${window.GO.font}` }}>Boshida: <ActBalance n={c.opening} /></div>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead><tr>
+                    <th style={{ ...th, width: 92 }}>Sana</th><th style={th}>Amaliyot</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Debet</th><th style={{ ...th, textAlign: 'right' }}>Kredit</th>
+                  </tr></thead>
+                  <tbody>
+                    {c.entries.map((e, i) => (
+                      <tr key={i}>
+                        <td style={td}>{fmtDate(e.date)}</td><td style={td}>{e.name}</td>
+                        <td style={num}>{e.debit ? window.fmtSom(e.debit) : ''}</td>
+                        <td style={num}>{e.credit ? window.fmtSom(e.credit) : ''}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td style={{ ...td, fontWeight: 600 }} colSpan={2}>Davr aylanmasi</td>
+                      <td style={{ ...num, fontWeight: 600 }}>{window.fmtSom(c.debit)}</td>
+                      <td style={{ ...num, fontWeight: 600 }}>{window.fmtSom(c.credit)}</td>
+                    </tr>
+                    <tr>
+                      <td style={{ ...td, fontWeight: 600, borderBottom: 0 }} colSpan={2}>Yakuniy qoldiq</td>
+                      <td style={{ ...num, fontWeight: 600, borderBottom: 0 }} colSpan={2}><ActBalance n={c.closing} /></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </Card>
+            ))}
+
+            <Card pad={16} style={{ marginBottom: 16 }}>
+              <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Imzolovchilar</div>
+              <div style={{ ...muted, marginBottom: 12 }}>
+                Biz: {data.owner.fizFio || '—'} ({data.owner.name || '—'}) · JSHSHIR {data.owner.fizTin || '— (Sozlamalar → Kompaniya)'}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                <div>
+                  <FieldLabel>Ijarachi tomonidan F.I.Sh.</FieldLabel>
+                  <input className="adm-input" value={fio} placeholder="Direktor F.I.Sh." onChange={(e) => setFio(e.target.value)} />
+                </div>
+                <div>
+                  <FieldLabel>Uning JSHSHIR</FieldLabel>
+                  <input className="adm-input" value={pinfl} placeholder="14 raqam" inputMode="numeric" onChange={(e) => setPinfl(e.target.value)} />
+                </div>
+              </div>
+            </Card>
+
+            {blockers.length > 0 && (
+              <Card pad={14} style={{ marginBottom: 16 }}>
+                {blockers.map((b) => <div key={b} style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', marginBottom: 4 }}>• {b}</div>)}
+              </Card>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 22 }}>
+              <Btn kind="primary" disabled={blocked} onClick={send} style={{ opacity: blocked ? 0.5 : 1 }}>
+                <IconShieldCheck size={15} /> {busy ? 'Yuborilmoqda…' : 'Didox’ga yuborish va imzolash'}
+              </Btn>
+              {data.mode === 'mock' && <span style={muted}>Didox ulanmagan (mock) — hujjat haqiqatda yuborilmaydi.</span>}
+            </div>
+          </>
+        )}
+
+        {note && <Card pad={14} style={{ marginBottom: 16, font: `500 13px ${window.GO.font}`, color: 'var(--g-ink-2)' }}>{note}</Card>}
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>Yuborilgan dalolatnomalar</div>
+          {acts.length > 0 && <Btn kind="ghost" sm disabled={busy} onClick={sync}>Holatni yangilash</Btn>}
+        </div>
+        {acts.length === 0
+          ? <div style={muted}>Hali yuborilmagan.</div>
+          : acts.map((a) => {
+            const st = ACT_STATUS[actStatusKey(a)];
+            return (
+              <Card key={a.id} pad={12} style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>
+                    {a.number} · {fmtDate(a.periodFrom)} – {fmtDate(a.periodTo)}
+                  </div>
+                  <div style={{ ...muted, marginTop: 2 }}>
+                    Yakuniy: <ActBalance n={a.closing} /> · {fmtDate(a.date)} · {a.userEmail}
+                  </div>
+                  {a.didoxComment && <div style={{ ...muted, marginTop: 2, color: 'oklch(0.5 0.16 25)' }}>{a.didoxComment}</div>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ font: `600 12px ${window.GO.font}`, color: st.tone }}>{st.label}</span>
+                  {a.status === 'ready_to_sign' && (
+                    <Btn kind="primary" sm disabled={busy} onClick={() => sign(a)}><IconShieldCheck size={14} /> Imzolash</Btn>
+                  )}
+                </div>
+              </Card>
+            );
+          })}
+      </div>
+    </Drawer>
   );
 }
 
@@ -7877,7 +8325,7 @@ function ImportDetail({ id }) {
 
       <div style={{ maxHeight: 420, overflowY: 'auto' }} className="adm-scroll">
         {lines.map((l) => (
-          <div key={l.docNo} style={{
+          <div key={l.ref ?? l.docNo} style={{
             padding: '10px 12px', marginBottom: 8, borderRadius: 10, border: '1px solid var(--g-line)',
             background: l.outcome === 'created' ? 'transparent' : 'var(--g-bg)',
           }}>
@@ -8063,8 +8511,8 @@ function BankStatementPanel() {
       const next = {};
       for (const r of res.rows) {
         if (r.status !== 'matched') continue;
-        if (r.allocation?.length > 1) next[r.docNo] = r.allocation.map((a) => ({ bookingId: a.bookingId, amount: a.amount }));
-        else if (r.suggestion) next[r.docNo] = r.suggestion.bookingId;
+        if (r.allocation?.length > 1) next[r.ref] = r.allocation.map((a) => ({ bookingId: a.bookingId, amount: a.amount }));
+        else if (r.suggestion) next[r.ref] = r.suggestion.bookingId;
       }
       setAssign(next);
     } catch (e) { setErr(e?.message || "Faylni o'qib bo'lmadi"); }
@@ -8073,7 +8521,7 @@ function BankStatementPanel() {
 
   // An assignment is either a booking id (whole transfer) or a list of parts.
   const assigned = (r) => {
-    const v = assign[r.docNo];
+    const v = assign[r.ref];
     return Array.isArray(v) ? (v.length ? v : null) : (v || null);
   };
   const importable = (data?.rows || [])
@@ -8084,7 +8532,7 @@ function BankStatementPanel() {
     setBusy(true); setErr(null);
     try {
       const picked = {};
-      for (const r of importable) picked[r.docNo] = assigned(r);
+      for (const r of importable) picked[r.ref] = assigned(r);
       const res = await api.upload('/bank/statement/import', file, { assign: picked });
       setDone(res);
       setHistoryVersion((v) => v + 1);
@@ -8145,7 +8593,7 @@ function BankStatementPanel() {
         );
       }
       if (r.status === 'skip') return <span style={{ color: 'var(--g-ink-4)', font: `400 12.5px ${window.GO.font}` }}>—</span>;
-      const split = Array.isArray(assign[r.docNo]) ? assign[r.docNo] : null;
+      const split = Array.isArray(assign[r.ref]) ? assign[r.ref] : null;
       if (split) {
         return (
           <div>
@@ -8168,7 +8616,7 @@ function BankStatementPanel() {
       // Candidates first, then every lease — a transfer the matcher could not
       // place still has to be placeable without leaving the screen.
       const suggested = new Set((r.candidates || []).map((c) => c.bookingId));
-      const chosenId = typeof assign[r.docNo] === 'string' ? assign[r.docNo] : '';
+      const chosenId = typeof assign[r.ref] === 'string' ? assign[r.ref] : '';
       const chosen = chosenId
         && ((r.candidates || []).find((c) => c.bookingId === chosenId)
           || allBookings.find((b) => b.bookingId === chosenId));
@@ -8184,7 +8632,7 @@ function BankStatementPanel() {
           </div>
         )}
         <select className="adm-select" style={{ width: '100%', maxWidth: 290 }} value={chosenId}
-          onChange={(e) => setAssign((a) => ({ ...a, [r.docNo]: e.target.value }))}>
+          onChange={(e) => setAssign((a) => ({ ...a, [r.ref]: e.target.value }))}>
           <option value="">— tanlanmagan —</option>
           {/* The booking id and the debt are what tell one option from another.
               A tenant with five identical virtual-office leases renders five
@@ -8327,7 +8775,7 @@ function BankStatementPanel() {
             </Btn>
           </div>
 
-          <DataTable columns={columns} rows={rows} rowKey={(r) => r.docNo} empty="Bu bo'limda satr yo'q" />
+          <DataTable columns={columns} rows={rows} rowKey={(r) => r.ref} empty="Bu bo'limda satr yo'q" />
         </>
       )}
 
@@ -8357,10 +8805,10 @@ function BankStatementPanel() {
               ...(splitting.candidates || []),
               ...allBookings.filter((b) => !(splitting.candidates || []).some((c) => c.bookingId === b.bookingId)),
             ]}
-            value={Array.isArray(assign[splitting.docNo]) ? assign[splitting.docNo] : null}
+            value={Array.isArray(assign[splitting.ref]) ? assign[splitting.ref] : null}
             onCancel={() => setSplitting(null)}
             onSave={(parts) => {
-              setAssign((a) => ({ ...a, [splitting.docNo]: parts }));
+              setAssign((a) => ({ ...a, [splitting.ref]: parts }));
               setSplitting(null);
             }}
           />
@@ -9837,6 +10285,8 @@ function PlatformTab() {
     account: initCo.account ?? '',
     mfo: initCo.mfo ?? '',
     director: initCo.director ?? '',
+    // The director's own PINFL: didox wants the signing person's on an akt sverki.
+    directorPinfl: initCo.directorPinfl ?? '',
     accountant: initCo.accountant ?? '',
     // Rent is billed as a service, not as a count of pieces.
     packageCode: initCo.packageCode ?? '',
@@ -10006,6 +10456,7 @@ function PlatformTab() {
             ['account', 'Hisob raqami (X/R)', '20208000607205498001'],
             ['mfo', 'MFO', '00083'],
             ['director', 'Rahbar', 'ABDURAHMONOV ABDUFATTOH'],
+            ['directorPinfl', 'Rahbar JSHSHIR', '14 raqam — solishtirma dalolatnoma uchun'],
             ['accountant', 'Bosh hisobchi', '—'],
           ].map(([k, label, ph]) => (
             <div key={k}>
@@ -10715,6 +11166,7 @@ const SECTION_META = {
   products:  { title: () => window.AT.navProducts,  sub: () => `${window.PRODUCTS.length} ta katalog mahsuloti · 4 toifa` },
   bookings:  { title: () => window.AT.navBookings,  sub: () => `${window.BOOKINGS.length} ta bandlov` },
   contracts: { title: () => "Shartnomalar", sub: () => "Ijara shartnomalari · uzaytirish va bekor qilish" },
+  requests:  { title: () => "Arizalar", sub: () => "Telegram botdan: ijaraga olish va ijarani tugatish so'rovlari" },
   debtors:   { title: () => "Undiruv", sub: () => `${((window.DEBTORS || {}).totals || {}).debtorCount || 0} ta qarzdor mijoz` },
   hosts:     { title: () => window.AT.navHosts,     sub: () => `${window.HOSTS.length} ta mezbon` },
   buildings: { title: () => window.AT.navBuildings, sub: () => `${(window.BUILDINGS || []).length} ta bino` },
@@ -10731,7 +11183,7 @@ function AdminApp() {
 
   // Section ↔ URL sync. Keeps the URL in sync with navigation so refresh and
   // back/forward work, and sections are bookmarkable/shareable.
-  const SECTIONS = ['overview','buildings','products','bookings','contracts','debtors','hosts','companies','revenue','invoices','reviews','settings'];
+  const SECTIONS = ['overview','buildings','products','bookings','contracts','requests','debtors','hosts','companies','revenue','invoices','reviews','settings'];
   const routeFromPath = () => {
     const parts = window.location.pathname.replace(/^\/+/, '').split('/').filter(Boolean);
     const section = SECTIONS.includes(parts[0]) ? parts[0] : 'overview';
@@ -10842,6 +11294,7 @@ function AdminApp() {
         return <HostsScreen search={search} route={route} setRoute={setRoute} />;
       case 'buildings': return <BuildingsScreen search={search} role={role} />;
       case 'contracts': return <ContractsScreen search={search} />;
+      case 'requests':  return <RequestsScreen search={search} />;
       case 'debtors':   return <DebtorsScreen search={search} />;
       case 'companies': return <CompaniesScreen search={search} />;
       case 'revenue':   return <RevenueScreen search={search} role={role} />;
@@ -10942,7 +11395,7 @@ function LightSidebar(props) {
 }
 
 function SidebarLightInner({ route, setRoute, role, counts }) {
-  const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0 };
+  const badge = { buildings: counts.pendingBuildings, products: counts.pendingProducts, bookings: counts.pendingBookings, reviews: counts.pendingReviews, debtors: ((window.DEBTORS || {}).totals || {}).debtorCount || 0, requests: (window.REQUEST_COUNTS || {}).total || 0 };
   return (
     <div style={{ width: 244, flexShrink: 0, background: 'var(--g-card)', borderRight: '1px solid var(--g-line)', display: 'flex', flexDirection: 'column', height: '100%' }}>
       <BrandLink setRoute={setRoute}>

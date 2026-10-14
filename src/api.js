@@ -249,6 +249,8 @@ function loaders(role) {
     companies: async () => { window.COMPANIES = await only('/companies', []); },
     // Receivables for Qarzdorlik + the nav badge; host-scoped on the server.
     debtors: async () => { window.DEBTORS = await get('/debtors').catch(() => EMPTY_DEBTORS); },
+    // Waiting Telegram-bot requests, for the Arizalar badge; host-scoped on the server.
+    requests: async () => { window.REQUEST_COUNTS = await get('/requests/counts').catch(() => ({ leads: 0, cancels: 0, total: 0 })); },
   };
 }
 
@@ -281,6 +283,8 @@ const AFFECTS = {
   users: [],
   agents: ['hosts'],
   sms: ['notifs'],
+  // Approving a lead creates a company; approving a cancellation moves a lease.
+  requests: ['requests', 'companies', 'bookings', 'units', 'overview', 'debtors', 'invoices', 'notifs'],
 };
 
 /**
