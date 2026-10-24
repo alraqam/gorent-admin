@@ -4975,6 +4975,9 @@ function ReconciliationDrawer({ company, onClose }) {
   const [loading, setLoading] = React.useState(false);
   const [fio, setFio] = React.useState('');
   const [pinfl, setPinfl] = React.useState('');
+  // The signer comes from the tax registry; the inputs only open when it
+  // didn't, or when someone other than the director signs.
+  const [editSigner, setEditSigner] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [note, setNote] = React.useState(null);
   const [acts, setActs] = React.useState([]);
@@ -4996,6 +4999,7 @@ function ReconciliationDrawer({ company, onClose }) {
         // Pre-fill the tenant's signer once; never overwrite what was typed.
         setFio((v) => v || r.partner.fizFio || '');
         setPinfl((v) => v || r.partner.fizTin || '');
+        if (!r.partner.fizFio || !/^\d{14}$/.test(r.partner.fizTin || '')) setEditSigner(true);
       })
       .catch((e) => { if (live) { setData(null); setErr(e?.message || 'Hisoblab bo‘lmadi'); } })
       .finally(() => { if (live) setLoading(false); });
@@ -5006,7 +5010,7 @@ function ReconciliationDrawer({ company, onClose }) {
   // live, so the list shrinks as the operator fills them in.
   const blockers = (data?.blockers || []).filter((b) => !/imzolovchi/.test(b));
   if (!fio.trim()) blockers.push('Ijarachi tomonidan imzolovchining F.I.Sh. kiritilmagan.');
-  if (!/^\d{14}$/.test(pinfl.replace(/\D/g, ''))) blockers.push('Ijarachi imzolovchisining JSHSHIR (14 raqam) kiritilmagan.');
+  if (!/^\d{14}$/.test(pinfl.replace(/\D/g, ''))) blockers.push('Ijarachi imzolovchisining JSHSHIR soliq reyestrida topilmadi — qo‘lda kiriting (14 raqam).');
 
   const sign = async (act) => {
     setBusy(true); setNote(null);
@@ -5123,7 +5127,13 @@ function ReconciliationDrawer({ company, onClose }) {
               <div style={{ ...muted, marginBottom: 12 }}>
                 Biz: {data.owner.fizFio || '—'} ({data.owner.name || '—'}) · JSHSHIR {data.owner.fizTin || '— (Sozlamalar → Kompaniya)'}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              {!editSigner && (
+                <div style={{ ...muted, display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                  <span style={{ flex: 1, minWidth: 0 }}>Ijarachi: {fio || '—'} ({company.name}) · JSHSHIR {pinfl || '—'}</span>
+                  <button type="button" onClick={() => setEditSigner(true)} style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'var(--g-brand-ink)', textDecoration: 'underline', font: 'inherit', whiteSpace: 'nowrap', flexShrink: 0 }}>o‘zgartirish</button>
+                </div>
+              )}
+              {editSigner && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                 <div>
                   <FieldLabel>Ijarachi tomonidan F.I.Sh.</FieldLabel>
                   <input className="adm-input" value={fio} placeholder="Direktor F.I.Sh." onChange={(e) => setFio(e.target.value)} />
@@ -5132,7 +5142,7 @@ function ReconciliationDrawer({ company, onClose }) {
                   <FieldLabel>Uning JSHSHIR</FieldLabel>
                   <input className="adm-input" value={pinfl} placeholder="14 raqam" inputMode="numeric" onChange={(e) => setPinfl(e.target.value)} />
                 </div>
-              </div>
+              </div>}
             </Card>
 
             {blockers.length > 0 && (
