@@ -5091,7 +5091,7 @@ function ReconciliationDrawer({ company, onClose }) {
                 <div style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', borderBottom: '1px solid var(--g-line)' }}>
                   <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>
                     Shartnoma №{c.contractNo} · {fmtDate(c.contractDate)}
-                    {c.noContract && <span style={{ ...muted, marginLeft: 8, color: 'oklch(0.55 0.13 70)' }}>shartnoma yo‘q — bandlov raqami ishlatiladi</span>}
+                    {c.noContract && <span style={{ ...muted, marginLeft: 8, color: 'oklch(0.55 0.18 25)' }}>shartnoma yo‘q — dalolatnoma tuzib bo‘lmaydi</span>}
                   </div>
                   <div style={{ font: `500 12.5px ${window.GO.font}` }}>Boshida: <ActBalance n={c.opening} /></div>
                 </div>
