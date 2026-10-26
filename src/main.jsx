@@ -9688,6 +9688,8 @@ function ContractsScreen({ search }) {
   const [contracts, setContracts] = React.useState(null);
   const [status, setStatus] = React.useState('all');
   const [detailId, setDetailId] = React.useState(null);
+  const [importing, setImporting] = React.useState(false);
+  const isPlatform = (api.currentUser() || {}).role === 'platform';
 
   const load = React.useCallback(() => {
     api.get('/contracts').then(setContracts).catch((e) => { console.error(e); setContracts([]); });
@@ -9736,12 +9738,152 @@ function ContractsScreen({ search }) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
         <StatusChips dict={window.CONTRACT_STATUS} value={status} setValue={setStatus} counts={counts} />
-        <Btn kind="ghost" sm onClick={load}><IconRefresh size={15} /> Yangilash</Btn>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {isPlatform && <Btn kind="ghost" sm onClick={() => setImporting(true)}><IconDoc size={15} /> didox dan import</Btn>}
+          <Btn kind="ghost" sm onClick={load}><IconRefresh size={15} /> Yangilash</Btn>
+        </div>
       </div>
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} onRow={(c) => setDetailId(c.id)}
         empty={contracts ? "Hozircha shartnomalar yo'q" : 'Yuklanmoqda…'} />
       <ContractDetailDrawer c={all.find((c) => c.id === detailId) || null} onClose={() => setDetailId(null)} onChanged={load} />
+      {isPlatform && <ContractImportDrawer open={importing} onClose={() => setImporting(false)} onDone={load} />}
     </div>
+  );
+}
+
+// ─── didox → Gorent contract import ─────────────────────────
+// Every contract signed in didox, laid against the leases (api: contracts/
+// didox-import). Nothing changes until the operator ticks rows and imports;
+// the server rebuilds the plan on apply, so a stale preview cannot force a row.
+const IMPORT_ACTION = {
+  create: { label: 'Yangi shartnoma', color: 'oklch(0.5 0.14 155)', bg: 'oklch(0.95 0.05 155)' },
+  update: { label: 'Yangilanadi', color: 'oklch(0.5 0.13 250)', bg: 'oklch(0.95 0.04 250)' },
+  conflict: { label: 'Raqam band', color: 'oklch(0.55 0.18 25)', bg: 'oklch(0.96 0.04 25)' },
+  no_lease: { label: 'Bandlov topilmadi', color: 'oklch(0.55 0.13 70)', bg: 'oklch(0.96 0.05 80)' },
+  no_company: { label: 'Ijarachi yo‘q', color: 'oklch(0.55 0.13 70)', bg: 'oklch(0.96 0.05 80)' },
+  already: { label: 'Import qilingan', color: 'var(--g-ink-4)', bg: 'var(--g-bg-2)' },
+};
+const importable = (r) => r.action === 'create' || r.action === 'update';
+
+function ContractImportDrawer({ open, onClose, onDone }) {
+  const [rows, setRows] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [selected, setSelected] = React.useState(new Set());
+  const [busy, setBusy] = React.useState(false);
+  const [filter, setFilter] = React.useState('todo');
+
+  const load = React.useCallback(() => {
+    setRows(null); setError(null);
+    api.get('/contracts/didox-import')
+      .then((r) => {
+        const list = r.rows || [];
+        setRows(list);
+        setSelected(new Set(list.filter(importable).map((x) => x.docId)));
+      })
+      .catch((e) => setError(e.message || 'didox dan o‘qib bo‘lmadi'));
+  }, []);
+  React.useEffect(() => { if (open) load(); }, [open, load]);
+
+  const all = rows || [];
+  const counts = {};
+  all.forEach((r) => { counts[r.action] = (counts[r.action] || 0) + 1; });
+  const shown = all.filter((r) => filter === 'all' || (filter === 'todo' ? importable(r) : !importable(r) && r.action !== 'already'));
+  const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const apply = async () => {
+    if (!selected.size) return;
+    if (!window.confirm(`${selected.size} ta shartnoma import qilinsinmi? Mavjud shartnomalar didox dagi raqam va sanani oladi.`)) return;
+    setBusy(true);
+    try {
+      const res = await api.post('/contracts/didox-import', { docIds: [...selected] });
+      const failed = res.failed || [];
+      window.alert(`Import qilindi: ${res.applied} ta.` + (failed.length ? `\n\nXato (${failed.length}):\n${failed.map((f) => `${f.number}: ${f.error}`).join('\n')}` : ''));
+      onDone && onDone();
+      load();
+    } catch (e) {
+      window.alert(e.message || 'Import qilib bo‘lmadi');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cell = { padding: '9px 10px', borderBottom: '1px solid var(--g-line)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', verticalAlign: 'top' };
+  const tabs = [
+    ['todo', `Import qilinadi (${(counts.create || 0) + (counts.update || 0)})`],
+    ['problems', `Muammoli (${(counts.conflict || 0) + (counts.no_lease || 0) + (counts.no_company || 0)})`],
+    ['all', `Hammasi (${all.length})`],
+  ];
+
+  return (
+    <Drawer open={open} onClose={onClose} width={960}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0, gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
+          <div>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>didox dan shartnomalar</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Ikki tomon imzolagan shartnomalar · didox raqami, sanasi va ID si ustun</div>
+          </div>
+        </div>
+        <Btn kind="primary" sm onClick={apply} disabled={busy || !selected.size}>{busy ? 'Import…' : `${selected.size} ta import qilish`}</Btn>
+      </div>
+
+      <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
+        {error && <Card style={{ color: 'oklch(0.55 0.18 25)', marginBottom: 14 }}>{error}</Card>}
+        {!rows && !error && <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>didox dan o‘qilmoqda… (bir necha soniya)</div>}
+        {rows && (
+          <>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+              {tabs.map(([k, label]) => (
+                <button key={k} onClick={() => setFilter(k)} style={{ border: 0, cursor: 'pointer', padding: '6px 12px', borderRadius: 999, font: `600 12px ${window.GO.font}`, background: filter === k ? 'var(--g-ink)' : 'var(--g-bg-2)', color: filter === k ? 'var(--g-bg)' : 'var(--g-ink-3)' }}>{label}</button>
+              ))}
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['', 'didox №', 'Ijarachi', 'Bandlov', 'Amal'].map((h, i) => (
+                  <th key={i} style={{ ...cell, font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: 'left' }}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {shown.map((r) => {
+                  const a = IMPORT_ACTION[r.action] || IMPORT_ACTION.already;
+                  return (
+                    <tr key={r.docId}>
+                      <td style={{ ...cell, width: 30 }}>
+                        {importable(r) && <input type="checkbox" checked={selected.has(r.docId)} disabled={busy} onChange={() => toggle(r.docId)} style={{ cursor: 'pointer', width: 15, height: 15 }} />}
+                      </td>
+                      <td style={cell}>
+                        <div style={{ font: `600 12.5px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{r.number}</div>
+                        <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5 }}>{fmtDate(r.date)}</div>
+                      </td>
+                      <td style={cell}>
+                        <div style={{ color: 'var(--g-ink)' }}>{r.companyName || r.tenantName || '—'}</div>
+                        <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5 }}>STIR {r.tenantTin || '—'}</div>
+                      </td>
+                      <td style={cell}>
+                        {r.bookingId ? (
+                          <>
+                            <div style={{ color: 'var(--g-ink)' }}>{r.bookingId} · {r.bookingLabel}</div>
+                            <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5 }}>{fmtDate(r.bookingStart)} – {fmtDate(r.bookingEnd)}</div>
+                          </>
+                        ) : '—'}
+                      </td>
+                      <td style={cell}>
+                        <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, font: `600 11.5px ${window.GO.font}`, color: a.color, background: a.bg }}>{a.label}</span>
+                        {r.action === 'update' && r.currentNumber && r.currentNumber !== r.number && (
+                          <div style={{ color: 'var(--g-ink-3)', fontSize: 11.5, marginTop: 3 }}>{r.currentNumber} → {r.number}</div>
+                        )}
+                        {r.reason && <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5, marginTop: 3 }}>{r.reason}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {!shown.length && <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}`, padding: 16 }}>Bu bo‘limda hech narsa yo‘q</div>}
+          </>
+        )}
+      </div>
+    </Drawer>
   );
 }
 
