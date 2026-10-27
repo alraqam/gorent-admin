@@ -4981,6 +4981,15 @@ function ReconciliationDrawer({ company, onClose }) {
   const [busy, setBusy] = React.useState(false);
   const [note, setNote] = React.useState(null);
   const [acts, setActs] = React.useState([]);
+  // Bookings whose contracts the operator unticked. The server recomputes the
+  // totals without them, and leaves them out of what it files.
+  const [excluded, setExcluded] = React.useState(() => new Set());
+  const excludeParam = [...excluded].sort().join(',');
+  const toggleContract = (bookingId) => setExcluded((s) => {
+    const n = new Set(s);
+    n.has(bookingId) ? n.delete(bookingId) : n.add(bookingId);
+    return n;
+  });
 
   const loadActs = React.useCallback(async () => {
     try { setActs(await api.get(`/reconciliation?companyId=${encodeURIComponent(company.id)}`)); } catch { /* the list is secondary */ }
@@ -4992,7 +5001,8 @@ function ReconciliationDrawer({ company, onClose }) {
     if (!from || !to) return;
     let live = true;
     setLoading(true); setErr(null);
-    api.get(`/reconciliation/preview?companyId=${encodeURIComponent(company.id)}&from=${from}&to=${to}`)
+    const ex = excludeParam ? `&exclude=${encodeURIComponent(excludeParam)}` : '';
+    api.get(`/reconciliation/preview?companyId=${encodeURIComponent(company.id)}&from=${from}&to=${to}${ex}`)
       .then((r) => {
         if (!live) return;
         setData(r);
@@ -5004,7 +5014,7 @@ function ReconciliationDrawer({ company, onClose }) {
       .catch((e) => { if (live) { setData(null); setErr(e?.message || 'Hisoblab bo‘lmadi'); } })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [company.id, from, to]);
+  }, [company.id, from, to, excludeParam]);
 
   // The server lists what stops a send; the two fields typed here are checked
   // live, so the list shrinks as the operator fills them in.
@@ -5028,7 +5038,7 @@ function ReconciliationDrawer({ company, onClose }) {
     setBusy(true); setNote(null);
     let act;
     try {
-      act = await api.post('/reconciliation', { companyId: company.id, from, to, partnerFio: fio.trim(), partnerPinfl: pinfl.replace(/\D/g, '') });
+      act = await api.post('/reconciliation', { companyId: company.id, from, to, partnerFio: fio.trim(), partnerPinfl: pinfl.replace(/\D/g, ''), exclude: [...excluded] });
     } catch (e) {
       setNote(e?.message || 'Didox’ga yuborilmadi');
       setBusy(false);
@@ -5086,16 +5096,24 @@ function ReconciliationDrawer({ company, onClose }) {
               <div style={{ ...muted, marginTop: 10 }}>Musbat — ijarachi qarzi, manfiy — oldindan to‘lov. Yakuniy qoldiq Qarzdorlik ekranidagi raqam bilan bir xil.</div>
             </Card>
 
-            {act.contracts.map((c) => (
-              <Card key={c.bookingId} pad={0} style={{ marginBottom: 16, overflow: 'hidden' }}>
-                <div style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', borderBottom: '1px solid var(--g-line)' }}>
-                  <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)' }}>
-                    Shartnoma №{c.contractNo} · {fmtDate(c.contractDate)}
-                    {c.noContract && <span style={{ ...muted, marginLeft: 8, color: 'oklch(0.55 0.18 25)' }}>shartnoma yo‘q — dalolatnoma tuzib bo‘lmaydi</span>}
-                  </div>
-                  <div style={{ font: `500 12.5px ${window.GO.font}` }}>Boshida: <ActBalance n={c.opening} /></div>
+            {(act.contracts.length + (act.leftOut || []).length) > 1 && (
+              <div style={{ ...muted, marginBottom: 10 }}>Bir dalolatnomada bir nechta shartnoma bo‘lishi mumkin. Belgini olib tashlangan shartnoma bu dalolatnomaga kirmaydi.</div>
+            )}
+            {[...act.contracts, ...(act.leftOut || [])]
+              .sort((x, y) => x.contractDate.localeCompare(y.contractDate) || x.contractNo.localeCompare(y.contractNo))
+              .map((c) => {
+              const out = c.reason === 'no_contract' || c.reason === 'excluded';
+              return (
+              <Card key={c.bookingId} pad={0} style={{ marginBottom: 16, overflow: 'hidden', opacity: out ? 0.6 : 1 }}>
+                <div style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', borderBottom: out ? 0 : '1px solid var(--g-line)' }}>
+                  <label style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', display: 'flex', alignItems: 'center', gap: 8, cursor: c.noContract ? 'default' : 'pointer' }}>
+                    <input type="checkbox" checked={!out} disabled={c.noContract || busy} onChange={() => toggleContract(c.bookingId)} style={{ width: 15, height: 15, cursor: c.noContract ? 'default' : 'pointer' }} />
+                    {c.noContract ? `Bandlov ${c.bookingId}` : `Shartnoma №${c.contractNo} · ${fmtDate(c.contractDate)}`}
+                    {c.noContract && <span style={{ ...muted, color: 'oklch(0.55 0.18 25)' }}>shartnoma yo‘q — dalolatnomaga kirmaydi</span>}
+                  </label>
+                  <div style={{ font: `500 12.5px ${window.GO.font}` }}>{out ? <>Qoldiq: <ActBalance n={c.closing} /></> : <>Boshida: <ActBalance n={c.opening} /></>}</div>
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                {!out && <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead><tr>
                     <th style={{ ...th, width: 92 }}>Sana</th><th style={th}>Amaliyot</th>
                     <th style={{ ...th, textAlign: 'right' }}>Debet</th><th style={{ ...th, textAlign: 'right' }}>Kredit</th>
@@ -5118,9 +5136,10 @@ function ReconciliationDrawer({ company, onClose }) {
                       <td style={{ ...num, fontWeight: 600, borderBottom: 0 }} colSpan={2}><ActBalance n={c.closing} /></td>
                     </tr>
                   </tbody>
-                </table>
+                </table>}
               </Card>
-            ))}
+              );
+            })}
 
             <Card pad={16} style={{ marginBottom: 16 }}>
               <div style={{ font: `600 13.5px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 12 }}>Imzolovchilar</div>
