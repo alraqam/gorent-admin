@@ -9840,7 +9840,7 @@ function ContractImportDrawer({ open, onClose, onDone }) {
           <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
           <div>
             <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>didox dan shartnomalar</div>
-            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Ikki tomon imzolagan shartnomalar · didox raqami, sanasi va ID si ustun</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Imzolangan va ijarachi imzosini kutayotgan shartnomalar · didox raqami, sanasi va ID si ustun</div>
           </div>
         </div>
         <Btn kind="primary" sm onClick={apply} disabled={busy || !selected.size}>{busy ? 'Import…' : `${selected.size} ta import qilish`}</Btn>
@@ -9873,6 +9873,7 @@ function ContractImportDrawer({ open, onClose, onDone }) {
                       <td style={cell}>
                         <div style={{ font: `600 12.5px ui-monospace, monospace`, color: 'var(--g-ink)' }}>{r.number}</div>
                         <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5 }}>{fmtDate(r.date)}</div>
+                        {r.signed === false && <div style={{ color: 'oklch(0.55 0.13 70)', fontSize: 11.5, marginTop: 2 }}>didox da imzolanmagan</div>}
                       </td>
                       <td style={cell}>
                         <div style={{ color: 'var(--g-ink)' }}>{r.companyName || r.tenantName || '—'}</div>
