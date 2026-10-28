@@ -6628,7 +6628,7 @@ const STEP_FIELDS = (() => {
       f('number', 'Pretenziya raqami', 'text', true),
       f('sentAt', 'Yuborilgan sana', 'date', true),
       f('sentVia', 'Yuborish usuli', 'enum', true, [
-        o('pochta', 'Pochta'), o('kuryer', 'Kuryer'), o('qolda', "Qo'lda topshirildi"),
+        o('didox', 'didox'), o('pochta', 'Pochta'), o('kuryer', 'Kuryer'), o('qolda', "Qo'lda topshirildi"),
         o('email', 'Email'), o('telegram', 'Telegram'), o('boshqa', 'Boshqa'),
       ]),
       f('trackingNo', 'Pochta/kuryer raqami'),
@@ -8104,6 +8104,176 @@ function NotesCell({ n }) {
   );
 }
 
+// The talabnoma batch: every case at «Pretenziya (loyiha)», one letter per
+// tenant. Sent through didox as a letter with the PDF (signed afterwards in
+// didox, like the acts), and printable as one PDF — drafts before sending,
+// the exact letters after.
+function TalabnomaDrawer({ open, onClose, onSent }) {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [tab, setTab] = React.useState('ready');
+  const [picked, setPicked] = React.useState(new Set());
+  const [pickedSent, setPickedSent] = React.useState(new Set());
+  const [busy, setBusy] = React.useState(null);
+
+  const load = React.useCallback(() => {
+    setData(null); setError(null);
+    api.get('/collection/talabnoma')
+      .then((d) => {
+        setData(d);
+        setPicked(new Set((d.ready || []).filter((g) => !g.problem).map((g) => g.companyId)));
+        setPickedSent(new Set());
+      })
+      .catch((e) => setError(e.message || 'Yuklab bo‘lmadi'));
+  }, []);
+  React.useEffect(() => { if (open) load(); }, [open, load]);
+
+  const ready = (data && data.ready) || [];
+  const sent = (data && data.sent) || [];
+  const toggle = (set, setter, id) => { const n = new Set(set); n.has(id) ? n.delete(id) : n.add(id); setter(n); };
+
+  const openPdf = async (query, label) => {
+    setBusy(label);
+    try {
+      const url = await api.fileBlobUrl(`/collection/talabnoma/pdf?${query}`);
+      window.open(url, '_blank');
+    } catch (e) {
+      window.alert(e.message || 'PDF tayyorlab bo‘lmadi');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const send = async () => {
+    const ids = [...picked];
+    if (!ids.length) return;
+    if (!window.confirm(`${ids.length} ta ijarachiga talabnoma didox ga yuborilsinmi?\n\nHar biri didox da qoralama bo‘lib tushadi — imzolashni didox da qilasiz. Ishlar «Pretenziya yuborildi» bosqichiga o‘tadi.`)) return;
+    setBusy('send');
+    try {
+      const { results } = await api.post('/collection/talabnoma/send', { companyIds: ids });
+      const ok = results.filter((r) => r.number);
+      const bad = results.filter((r) => r.error);
+      window.alert(`Yuborildi: ${ok.length} ta${ok.length ? ` (№ ${ok.map((r) => r.number).join(', ')})` : ''}`
+        + (bad.length ? `\n\nYuborilmadi (${bad.length}):\n${bad.map((r) => `${r.name}: ${r.error}`).join('\n')}` : ''));
+      if (ok.length) {
+        onSent && onSent();
+        await openPdf(`numbers=${encodeURIComponent(ok.map((r) => r.number).join(','))}`, 'pdf');
+      }
+      load();
+      setTab(ok.length ? 'sent' : 'ready');
+    } catch (e) {
+      window.alert(e.message || 'Yuborib bo‘lmadi');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cell = { padding: '9px 10px', borderBottom: '1px solid var(--g-line)', font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', verticalAlign: 'top' };
+  const head = (labels) => (
+    <thead><tr>{labels.map((h, i) => (
+      <th key={i} style={{ ...cell, font: `600 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', textAlign: i === labels.length - 1 ? 'right' : 'left' }}>{h}</th>
+    ))}</tr></thead>
+  );
+  const box = (checked, onChange) => (
+    <input type="checkbox" checked={checked} disabled={!!busy} onChange={onChange} style={{ cursor: 'pointer', width: 15, height: 15 }} />
+  );
+  const allSent = sent.length > 0 && pickedSent.size === sent.length;
+
+  return (
+    <Drawer open={open} onClose={onClose} width={900}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid var(--g-line)', flexShrink: 0, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={onClose} className="adm-iconbtn" style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--g-bg-2)', border: 0, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--g-ink)' }}><IconClose size={17} /></button>
+          <div>
+            <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)' }}>Talabnomalar</div>
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Har bir ijarachiga bitta xat — barcha shartnomalari bilan · didox orqali</div>
+          </div>
+        </div>
+        {tab === 'ready' ? (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Btn kind="ghost" sm disabled={!!busy || !picked.size}
+              onClick={() => openPdf(`companies=${encodeURIComponent([...picked].join(','))}`, 'draft')}
+              title="Raqamsiz loyiha — o‘qib chiqish uchun">{busy === 'draft' ? 'Tayyorlanmoqda…' : 'Loyiha PDF'}</Btn>
+            <Btn kind="primary" sm disabled={!!busy || !picked.size} onClick={send}>{busy === 'send' ? 'Yuborilmoqda…' : `${picked.size} ta didox ga yuborish`}</Btn>
+          </div>
+        ) : (
+          <Btn kind="primary" sm disabled={!!busy || !pickedSent.size}
+            onClick={() => openPdf(`numbers=${encodeURIComponent([...pickedSent].join(','))}`, 'pdf')}>
+            {busy === 'pdf' ? 'Tayyorlanmoqda…' : `${pickedSent.size} ta — bitta PDF`}
+          </Btn>
+        )}
+      </div>
+
+      <div className="adm-scroll" style={{ flex: 1, overflowY: 'auto', padding: 22 }}>
+        {error && <Card style={{ color: 'oklch(0.55 0.18 25)', marginBottom: 14 }}>{error}</Card>}
+        {!data && !error && <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>Yuklanmoqda…</div>}
+        {data && (
+          <>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+              {[['ready', `Yuborishga tayyor (${ready.length})`], ['sent', `Yuborilgan (${sent.length})`]].map(([k, label]) => (
+                <button key={k} onClick={() => setTab(k)} style={{ border: 0, cursor: 'pointer', padding: '6px 12px', borderRadius: 999, font: `600 12px ${window.GO.font}`, background: tab === k ? 'var(--g-ink)' : 'var(--g-bg-2)', color: tab === k ? 'var(--g-bg)' : 'var(--g-ink-3)' }}>{label}</button>
+              ))}
+            </div>
+
+            {tab === 'ready' && (ready.length === 0
+              ? <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>«Pretenziya (loyiha)» bosqichida ish yo‘q.</div>
+              : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  {head(['', 'Ijarachi', 'Shartnomalar', 'Akt sverki', 'Qarz'])}
+                  <tbody>
+                    {ready.map((g) => (
+                      <tr key={g.companyId || g.name} style={{ opacity: g.problem ? 0.6 : 1 }}>
+                        <td style={{ ...cell, width: 30 }}>{!g.problem && box(picked.has(g.companyId), () => toggle(picked, setPicked, g.companyId))}</td>
+                        <td style={cell}>
+                          <div style={{ color: 'var(--g-ink)', fontWeight: 600 }}>{g.name}</div>
+                          <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5 }}>STIR {g.tin || '—'}</div>
+                          {g.problem && <div style={{ color: 'oklch(0.55 0.18 25)', fontSize: 11.5, marginTop: 2 }}>{g.problem}</div>}
+                        </td>
+                        <td style={cell}>
+                          {g.cases.map((c) => (
+                            <div key={c.caseId} style={{ color: c.problem ? 'var(--g-ink-4)' : 'var(--g-ink-2)' }}>
+                              <span style={{ fontFamily: 'ui-monospace, monospace', textDecoration: c.problem ? 'line-through' : 'none' }}>{c.contractNo || c.bookingId}</span>
+                              {' · '}{fmtMoney(c.amount)}
+                              {c.problem && <span style={{ color: 'oklch(0.55 0.13 70)', marginLeft: 6 }}>({c.problem})</span>}
+                            </div>
+                          ))}
+                        </td>
+                        <td style={cell}>{g.act ? `${g.act.number} · ${fmtDate(g.act.date)}` : <span style={{ color: 'var(--g-ink-4)' }}>yo‘q</span>}</td>
+                        <td style={{ ...cell, textAlign: 'right', fontWeight: 600, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{fmtMoney(g.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ))}
+
+            {tab === 'sent' && (sent.length === 0
+              ? <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>Hali talabnoma yuborilmagan.</div>
+              : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  {head([box(allSent, () => setPickedSent(allSent ? new Set() : new Set(sent.map((x) => x.number)))), '№', 'Ijarachi', 'Ishlar', 'Summa'])}
+                  <tbody>
+                    {sent.map((t) => (
+                      <tr key={t.number}>
+                        <td style={{ ...cell, width: 30 }}>{box(pickedSent.has(t.number), () => toggle(pickedSent, setPickedSent, t.number))}</td>
+                        <td style={cell}>
+                          <div style={{ color: 'var(--g-ink)', fontWeight: 600 }}>№ {t.number}</div>
+                          <div style={{ color: 'var(--g-ink-4)', fontSize: 11.5 }}>{fmtDate(t.date)}</div>
+                        </td>
+                        <td style={cell}>{t.name}</td>
+                        <td style={{ ...cell, fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}>{t.caseNumbers.join(', ')}</td>
+                        <td style={{ ...cell, textAlign: 'right', fontWeight: 600, color: 'var(--g-ink)', whiteSpace: 'nowrap' }}>{fmtMoney(t.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ))}
+          </>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+
 // Download the whole receivables book as CSV — both groups, every column the
 // screen shows plus the ones it cannot fit: tax id, blacklist status, and the
 // collection record.
@@ -8923,6 +9093,7 @@ function DebtorsScreen({ search }) {
   const [paying, setPaying] = React.useState(null); // debtor row → record-payment modal
   const [blacklisting, setBlacklisting] = React.useState(null); // former debtor → blacklist modal
   const [detail, setDetail] = React.useState(null); // debtor row → collection drawer
+  const [talabnoma, setTalabnoma] = React.useState(false); // the talabnoma batch drawer
   // Bumped whenever a note changes, so the Kun tartibi tab and its count reload
   // without waiting for a full bootstrap.
   const [noteVersion, setNoteVersion] = React.useState(0);
@@ -9166,9 +9337,13 @@ function DebtorsScreen({ search }) {
       {/* Deliberately not tied to the stage filter or the search box: the
           file is the whole book, with a Guruh column telling joriy and sobiq
           apart. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 10 }}>
+        <Btn kind="ghost" sm onClick={() => setTalabnoma(true)} title="Pretenziya bosqichidagi ishlar — didox orqali talabnoma va bitta PDF">
+          <IconDoc size={14} /> Talabnomalar
+        </Btn>
         <ExportDebtorsBtn />
       </div>
+      <TalabnomaDrawer open={talabnoma} onClose={() => setTalabnoma(false)} onSent={() => window.__gorentRefresh && window.__gorentRefresh()} />
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.bookingId} onRow={setDetail}
         empty={stageFilter !== 'all' ? "Bu bosqichda qarzdor yo'q" : former ? "Sobiq ijarachilarda qarz yo'q 🎉" : "Qarzdorlik yo'q 🎉"} />
       </>
