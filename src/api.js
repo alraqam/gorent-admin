@@ -31,6 +31,26 @@ function clearToken() {
   try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch { /* ignore */ }
 }
 
+// A 401 on a request that CARRIED a token means the session is over: expired,
+// or retired by a password change. It ends the session once, here, instead of
+// surfacing as an error on whatever screen made the call — which used to be a
+// browser alert, one per failing request. The call itself never settles: the
+// app is about to unmount into the login screen, and a rejection would only
+// reach a catch that alerts. A 401 WITHOUT a token (a wrong password at login)
+// is an ordinary error and is thrown as before.
+const SESSION_EXPIRED = 'gorent:session-expired';
+let sessionEnded = false;
+function sessionExpired(res, sentToken) {
+  if (res.status !== 401 || !sentToken) return false;
+  clearToken();
+  if (!sessionEnded && typeof window !== 'undefined') {
+    sessionEnded = true;
+    window.dispatchEvent(new CustomEvent(SESSION_EXPIRED));
+  }
+  return true;
+}
+const never = () => new Promise(() => {});
+
 class ApiError extends Error {
   constructor(message, status) {
     super(message);
@@ -52,6 +72,7 @@ async function request(path, options = {}) {
   if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(BASE + path, { ...options, headers });
+  if (sessionExpired(res, !!token)) return never();
   if (res.status === 204) return null;
 
   let data = null;
@@ -92,6 +113,7 @@ async function upload(path, file, fields = null, fieldName = 'file') {
     fd.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
   }
   const res = await fetch(BASE + path, { method: 'POST', headers, body: fd });
+  if (sessionExpired(res, !!token)) return never();
   const text = await res.text();
   let data = null;
   if (text) { try { data = JSON.parse(text); } catch { data = text; } }
@@ -109,6 +131,7 @@ async function fileBlobUrl(path) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(BASE + path, { headers });
+  if (sessionExpired(res, !!token)) return never();
   if (!res.ok) {
     // The case documents refuse with a reason ("Avval talabnoma qadamini
     // kiriting"); show that rather than a generic line when the body has it.
@@ -131,6 +154,7 @@ async function downloadFile(path, filename) {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(BASE + path, { headers });
+  if (sessionExpired(res, !!token)) return never();
   if (!res.ok) {
     let msg = res.statusText || 'Yuklab bo‘lmadi';
     try {
@@ -193,6 +217,7 @@ function can(cap, hostId) {
 async function login(email, password) {
   const res = await post('/auth/login', { email, password });
   setToken(res.accessToken);
+  sessionEnded = false;
   try { localStorage.setItem(USER_KEY, JSON.stringify(res.user)); } catch { /* ignore */ }
   return res.user;
 }
@@ -316,7 +341,7 @@ export const api = {
   BASE,
   getToken, setToken, clearToken, currentUser, isAuthed,
   get, post, put, patch, del, upload, fileBlobUrl, downloadFile,
-  login, logout, bootstrap, refreshTouched,
+  login, logout, bootstrap, refreshTouched, SESSION_EXPIRED,
   can,
   ApiError,
 };

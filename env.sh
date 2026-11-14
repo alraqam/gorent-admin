@@ -20,7 +20,9 @@ fi
 
 cat > /usr/share/nginx/html/env.js <<CONFIG
 window.__GORENT_CONFIG__ = {
-  apiUrl: "${API_URL:-http://localhost:3001/api}"
+  apiUrl: "${API_URL:-http://localhost:3001/api}",
+  sentryDsn: "${SENTRY_DSN_ADMIN:-}",
+  sentryEnv: "${SENTRY_ENVIRONMENT:-production}"
 };
 window.EIMZO_KEYS = ${EIMZO_JSON};
 CONFIG

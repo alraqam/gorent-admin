@@ -7,9 +7,11 @@ test('login, dashboard, products, and user management', async ({ page }) => {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  // 1) Login screen → log in (demo creds are prefilled).
+  // 1) Login screen → log in. (The form is no longer prefilled outside the demo.)
   await page.goto('/');
   await expect(page.getByText('Tizimga kirish')).toBeVisible();
+  await page.locator('input[type="email"]').fill('operator@gorent.uz');
+  await page.locator('input[type="password"]').fill('gorent123');
   await page.getByRole('button', { name: 'Kirish' }).click();
 
   // 2) Dashboard renders with live data.
@@ -30,7 +32,7 @@ test('login, dashboard, products, and user management', async ({ page }) => {
   await page.getByRole('button', { name: "A'zo qo'shish" }).click();
   await page.getByPlaceholder('Ism').fill('UI Test User');
   await page.getByPlaceholder('Email').fill(email);
-  await page.getByPlaceholder('Parol (kamida 6 belgi)').fill('secret123');
+  await page.getByPlaceholder('Parol (kamida 10 belgi)').fill('secret12345');
   await page.getByRole('button', { name: "Qo'shish", exact: true }).click();
   await expect(page.getByText(email)).toBeVisible();
 

@@ -16,6 +16,15 @@ npm run build    # production build → dist/
 npm run preview  # serve the production build
 ```
 
+## Runtime settings (container env, read by `env.sh` at start)
+
+| Variable | What it does |
+| --- | --- |
+| `API_URL` | The API base URL, e.g. `https://api.example.uz/api`. |
+| `EIMZO_KEYS` | E-IMZO domain/key pairs, `domain1:key1,domain2:key2`. |
+| `SENTRY_DSN_ADMIN` | Turns on error reporting from the browser. Empty = off, and the SDK is never downloaded. Sends the error, stack, URL path, user id and role; no emails, names or request bodies. |
+| `SENTRY_ENVIRONMENT` | Sentry environment name (default `production`), e.g. `staging`. |
+
 ## What's inside
 
 A full-viewport, clickable admin prototype:

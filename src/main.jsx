@@ -12,6 +12,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { api } from './api.js';
 import { eimzo } from './eimzo.js';
+import { reportError, setMonitoringUser } from './monitoring.js';
 
 window.React = React;
 window.ReactDOM = ReactDOM;
@@ -11878,7 +11879,7 @@ const DEMO_ACCOUNTS = [
 ];
 const DEMO_PASSWORD = 'gorent123';
 
-function LoginScreen({ onLogin }) {
+function LoginScreen({ onLogin, notice }) {
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -11926,6 +11927,9 @@ function LoginScreen({ onLogin }) {
               <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>Parol</div>
               <input className="adm-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" />
             </div>
+            {notice && !err && (
+              <div role="status" style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.42 0.12 250)', background: 'oklch(0.96 0.03 250)', padding: '9px 12px', borderRadius: 10, marginBottom: 14 }}>{notice}</div>
+            )}
             {err && (
               <div style={{ font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)', background: 'oklch(0.96 0.04 25)', padding: '9px 12px', borderRadius: 10, marginBottom: 14 }}>{err}</div>
             )}
@@ -11967,10 +11971,50 @@ function StatusScreen({ title, sub, children }) {
   );
 }
 
+// Last line of defence: a render error anywhere in the app shows this instead
+// of a blank page, and is reported (monitoring.js) with the component stack.
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    reportError(error, { componentStack: info?.componentStack });
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <StatusScreen title="Nimadir xato ketdi" sub="Sahifani ko'rsatib bo'lmadi. Xato qayd etildi — sahifani yangilab ko'ring.">
+        <div style={{ marginTop: 18, display: 'flex', gap: 8, justifyContent: 'center' }}>
+          <Btn kind="primary" sm onClick={() => location.reload()}>Sahifani yangilash</Btn>
+          <Btn kind="ghost" sm onClick={() => this.setState({ error: null })}>Qayta urinish</Btn>
+        </div>
+      </StatusScreen>
+    );
+  }
+}
+
 function Root() {
   const [authed, setAuthed] = React.useState(api.isAuthed());
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState(null);
+  // Why the login screen is showing, when it is not the first visit.
+  const [notice, setNotice] = React.useState(null);
+
+  // Any request with a dead token lands here (api.js), once.
+  React.useEffect(() => {
+    const onExpired = () => {
+      setReady(false);
+      setAuthed(false);
+      setNotice("Sessiya tugadi yoki parol o'zgartirildi — qayta kiring.");
+    };
+    window.addEventListener(api.SESSION_EXPIRED, onExpired);
+    return () => window.removeEventListener(api.SESSION_EXPIRED, onExpired);
+  }, []);
+  React.useEffect(() => { setMonitoringUser(authed ? api.currentUser() : null); }, [authed, ready]);
 
   const load = React.useCallback(() => {
     setReady(false); setError(null);
@@ -11984,7 +12028,7 @@ function Root() {
 
   React.useEffect(() => { if (authed) load(); }, [authed, load]);
 
-  if (!authed) return <LoginScreen onLogin={() => setAuthed(true)} />;
+  if (!authed) return <LoginScreen notice={notice} onLogin={() => { setNotice(null); setAuthed(true); }} />;
   if (error) {
     return (
       <StatusScreen title="Serverga ulanib boʻlmadi" sub={`${error}. API ishga tushganini tekshiring (${api.BASE}).`}>
@@ -12000,4 +12044,4 @@ function Root() {
 }
 
 const adminRoot = ReactDOM.createRoot(document.getElementById('root'));
-adminRoot.render(<Root />);
+adminRoot.render(<ErrorBoundary><Root /></ErrorBoundary>);
