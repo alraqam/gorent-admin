@@ -8415,10 +8415,19 @@ const SKIP_REASON = {
   not_in_file: 'faylda yo\'q',
   not_incoming: 'kirim emas',
   bad_amount: "summa noto'g'ri",
+  link_unknown_payment: "bog'lanadigan to'lov topilmadi",
+  link_already_from_bank: "to'lov allaqachon bankdan kiritilgan",
+  link_amount_differs: "to'lov summasi boshqa",
+  link_other_tenant: "to'lov boshqa ijarachiniki",
+  link_too_far_apart: "sanalar juda uzoq",
 };
 
 function skipReasonLabel(reason) {
   if (!reason) return '—';
+  if (reason.startsWith('possible_duplicate:')) {
+    return `qo'lda kiritilgan to'lovga o'xshaydi (${reason.split(':')[1]}) — qaror kerak`;
+  }
+  if (reason.startsWith('was:')) return `qo'lda kiritilgan to'lovga bog'landi, sana ${fmtDate(reason.slice(4))} edi`;
   if (reason.startsWith('sum_mismatch:')) {
     return `taqsimlangan summa mos emas (${window.fmtSom(Number(reason.split(':')[1]) || 0)})`;
   }
@@ -8526,7 +8535,7 @@ function ImportDetail({ id }) {
         {lines.map((l) => (
           <div key={l.ref ?? l.docNo} style={{
             padding: '10px 12px', marginBottom: 8, borderRadius: 10, border: '1px solid var(--g-line)',
-            background: l.outcome === 'created' ? 'transparent' : 'var(--g-bg)',
+            background: l.outcome === 'skipped' ? 'var(--g-bg)' : 'transparent',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0 }}>
@@ -8538,14 +8547,17 @@ function ImportDetail({ id }) {
               <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                 <div style={{ font: `700 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{l.amount ? window.fmtSom(l.amount) : '—'}</div>
                 <div style={{ marginTop: 3 }}>
-                  {l.outcome === 'created'
-                    ? <Chip hue={155}>kiritildi</Chip>
+                  {l.outcome === 'created' ? <Chip hue={155}>kiritildi</Chip>
+                    : l.outcome === 'linked' ? <Chip hue={200}>bog'landi</Chip>
                     : <Chip hue={55}>o'tkazildi</Chip>}
                 </div>
               </div>
             </div>
-            {l.outcome === 'created' ? (
+            {l.outcome !== 'skipped' ? (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--g-line)' }}>
+                {l.outcome === 'linked' && (
+                  <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 4 }}>{skipReasonLabel(l.reason)}</div>
+                )}
                 {(l.parts || []).map((part) => (
                   <div key={part.paymentId} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 2 }}>
                     <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -8658,6 +8670,9 @@ function BankStatementPanel() {
   const [file, setFile] = React.useState(null);
   const [data, setData] = React.useState(null);
   const [assign, setAssign] = React.useState({});
+  // ref → 'link:<paymentId>' | 'new', for rows the server flagged as possibly
+  // typed in by hand already. Never pre-filled: that is the question.
+  const [dupChoice, setDupChoice] = React.useState({});
   const [filter, setFilter] = React.useState('all');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
@@ -8689,7 +8704,7 @@ function BankStatementPanel() {
     .sort((a, b) => leaseLabel(a).localeCompare(leaseLabel(b))), [window.BOOKINGS]);
 
   const load = async (f) => {
-    setFile(f); setData(null); setAssign({}); setDone(null); setErr(null);
+    setFile(f); setData(null); setAssign({}); setDupChoice({}); setDone(null); setErr(null);
     if (!f) return;
     setBusy(true);
     try {
@@ -8723,8 +8738,11 @@ function BankStatementPanel() {
     const v = assign[r.ref];
     return Array.isArray(v) ? (v.length ? v : null) : (v || null);
   };
-  const importable = (data?.rows || [])
-    .filter((r) => r.status !== 'imported' && r.direction === 'credit' && assigned(r));
+  const ready = (r) => r.status !== 'imported' && r.direction === 'credit' && assigned(r);
+  // A row flagged as a likely duplicate waits for the operator's answer; the
+  // server would refuse it anyway.
+  const importable = (data?.rows || []).filter((r) => ready(r) && (!r.duplicate || dupChoice[r.ref]));
+  const undecided = (data?.rows || []).filter((r) => ready(r) && r.duplicate && !dupChoice[r.ref]).length;
   const importSum = importable.reduce((sum, r) => sum + r.amount, 0);
 
   const run = async () => {
@@ -8732,7 +8750,9 @@ function BankStatementPanel() {
     try {
       const picked = {};
       for (const r of importable) picked[r.ref] = assigned(r);
-      const res = await api.upload('/bank/statement/import', file, { assign: picked });
+      const duplicates = {};
+      for (const r of importable) if (dupChoice[r.ref]) duplicates[r.ref] = dupChoice[r.ref];
+      const res = await api.upload('/bank/statement/import', file, { assign: picked, duplicates });
       setDone(res);
       setHistoryVersion((v) => v + 1);
       // The debtors list on screen is now wrong — this money came off it.
@@ -8741,12 +8761,13 @@ function BankStatementPanel() {
       // the imported rows come back marked as such.
       setData(await api.upload('/bank/statement/preview', file));
       setAssign({});
+      setDupChoice({});
     } catch (e) { setErr(e?.message || 'Import bajarilmadi'); }
     finally { setBusy(false); }
   };
 
   const reset = () => {
-    setFile(null); setData(null); setAssign({}); setDone(null); setErr(null);
+    setFile(null); setData(null); setAssign({}); setDupChoice({}); setDone(null); setErr(null);
     if (inputRef.current) inputRef.current.value = '';
   };
 
@@ -8868,8 +8889,23 @@ function BankStatementPanel() {
       if (r.status === 'skip') return <Chip hue={250}>{SKIP_LABEL[r.skipReason] || "e'tiborsiz"}</Chip>;
       if (r.status === 'unmatched') return <Chip hue={25}>tanilmadi</Chip>;
       const why = (r.suggestion || r.candidates?.[0])?.why || [];
+      const d = r.duplicate;
       return (
         <div>
+          {d && (
+            <div style={{ marginBottom: 6, padding: '6px 8px', borderRadius: 8, background: 'oklch(0.96 0.05 55)', border: '1px solid oklch(0.85 0.09 55)' }}>
+              <div style={{ font: `600 11.5px ${window.GO.font}`, color: 'oklch(0.42 0.13 55)', lineHeight: 1.4 }}>
+                Qo'lda kiritilganga o'xshaydi: {d.paymentId}, {fmtDate(d.paidAt)}
+                {d.daysApart ? ` (${Math.abs(d.daysApart)} kun ${d.daysApart < 0 ? 'keyin' : 'oldin'})` : ''}
+              </div>
+              <select className="adm-select" style={{ width: '100%', marginTop: 4, fontSize: 12 }} value={dupChoice[r.ref] || ''}
+                onChange={(e) => setDupChoice((c) => ({ ...c, [r.ref]: e.target.value }))}>
+                <option value="">— qaror kerak —</option>
+                <option value={`link:${d.paymentId}`}>Shu to'lov — bankdagi sanaga tuzatish</option>
+                <option value="new">Boshqa pul — yangi to'lov yozish</option>
+              </select>
+            </div>
+          )}
           <Chip hue={CONF_HUE[r.confidence] || 55}>{CONF_LABEL[r.confidence] || 'tekshiring'}</Chip>
           {!!why.length && (
             <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 3 }}>
@@ -8933,6 +8969,7 @@ function BankStatementPanel() {
           <IconCheckCirc size={16} style={{ color: 'oklch(0.45 0.14 155)', flexShrink: 0, marginTop: 1 }} />
           <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', lineHeight: 1.5 }}>
             <b>{done.created} ta to'lov</b> kiritildi — {window.fmtSom(done.createdSum)} so'm.
+            {done.linked > 0 && <> {done.linked} ta qo'lda kiritilgan to'lov bankdagi yozuvga bog'landi.</>}
             {done.skipped > 0 && <> {done.skipped} ta satr o'tkazib yuborildi.</>}
             {done.learnedAccounts > 0 && <> {done.learnedAccounts} ta hisob raqami eslab qolindi — keyingi ko'chirma aniqroq tanaladi.</>}
           </div>
@@ -8973,6 +9010,11 @@ function BankStatementPanel() {
                 : 'Kiritish uchun qator tanlang'}
             </Btn>
           </div>
+          {undecided > 0 && (
+            <div style={{ margin: '0 0 12px', padding: '9px 12px', borderRadius: 10, background: 'oklch(0.96 0.05 55)', font: `500 12.5px ${window.GO.font}`, color: 'oklch(0.42 0.13 55)' }}>
+              {undecided} ta qator qo'lda kiritilgan to'lovga o'xshaydi — «Holat» ustunida har biri uchun qaror tanlang. Qaror tanlanmaguncha ular kiritilmaydi.
+            </div>
+          )}
 
           <DataTable columns={columns} rows={rows} rowKey={(r) => r.ref} empty="Bu bo'limda satr yo'q" />
         </>
