@@ -11213,7 +11213,7 @@ function TeamTab() {
         <div style={{ padding: '14px 20px', borderTop: '1px solid var(--g-line)', background: 'var(--g-bg)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <input className="adm-input" placeholder="Ism" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
           <input className="adm-input" placeholder="Email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
-          <input className="adm-input" type="password" placeholder="Parol (kamida 6 belgi)" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+          <input className="adm-input" type="password" placeholder="Parol (kamida 10 belgi)" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
           <select className="adm-select" style={{ width: '100%' }} value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
             <option value="platform">Platforma admini</option>
             <option value="host">Mezbon</option>
