@@ -11396,13 +11396,15 @@ function AuditTab() {
   const [err, setErr] = React.useState(null);
   const [entity, setEntity] = React.useState('all');
   const [actor, setActor] = React.useState('');
+  const [reason, setReason] = React.useState('all');
 
   const load = React.useCallback(() => {
     const q = new URLSearchParams({ limit: '100' });
     if (entity !== 'all') q.set('entity', entity);
     if (actor) q.set('actor', actor);
+    if (reason !== 'all') q.set('reason', reason);
     api.get('/audit?' + q.toString()).then(setRows).catch((e) => setErr(e.message));
-  }, [entity, actor]);
+  }, [entity, actor, reason]);
   React.useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
 
   const methodHue = { POST: 200, PUT: 70, PATCH: 70, DELETE: 25, GET: 250 };
@@ -11410,6 +11412,7 @@ function AuditTab() {
     const d = new Date(iso);
     return d.toLocaleDateString('uz-UZ') + ' ' + d.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
   };
+  const reasons = { all: 'Barcha turlar', write: "O'zgartirishlar", login: 'Kirishlar', refused: 'Rad etilganlar', file: "Hujjat ko'rish" };
   const entities = ['all', 'buildings', 'products', 'units', 'bookings', 'hosts', 'reviews', 'users', 'settings', 'integrations', 'notifications'];
 
   const columns = [
@@ -11417,7 +11420,7 @@ function AuditTab() {
     { key: 'actor', label: 'Foydalanuvchi', render: (r) => (
       <div>
         <div style={{ font: `600 13px ${window.GO.font}`, color: 'var(--g-ink)' }}>{r.actorEmail || '—'}</div>
-        <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{r.actorRole}</div>
+        <div style={{ font: `400 11px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>{[r.actorRole, r.ip].filter(Boolean).join(' · ')}</div>
       </div>
     ) },
     { key: 'action', label: 'Amal', render: (r) => (
@@ -11438,6 +11441,9 @@ function AuditTab() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <select className="adm-select" value={entity} onChange={(e) => setEntity(e.target.value)}>
             {entities.map((x) => <option key={x} value={x}>{x === 'all' ? "Barcha bo'limlar" : x}</option>)}
+          </select>
+          <select className="adm-select" value={reason} onChange={(e) => setReason(e.target.value)}>
+            {Object.entries(reasons).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
           <SearchInput value={actor} onChange={setActor} placeholder="Foydalanuvchi (email)" width={220} />
         </div>
