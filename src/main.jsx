@@ -7593,7 +7593,7 @@ function DebtDetailDrawer({ row, onClose, onPay }) {
 // screen means a collection case). It used to be a strip pinned
 // above the debtors table — the same eight rows on both tabs, unfiltered, and
 // with nothing to do but tick one. Here it is a work queue: bucketed by when
-// it is due, filtered by group/kind/source, actionable in bulk.
+// it is due, filtered by group/kind/source, one action per row.
 //
 // Dates are compared as calendar days (yyyy-mm-dd), the same way the server
 // draws "overdue": a task due earlier today is today's work, not a missed day.
@@ -7664,7 +7664,6 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
   // narrows to them or away from them.
   const [listed, setListed] = React.useState('all');
   const [q, setQ] = React.useState('');
-  const [sel, setSel] = React.useState(() => new Set());
   const [limit, setLimit] = React.useState(TASK_PAGE);
   const [busy, setBusy] = React.useState(false);
   const [adding, setAdding] = React.useState(false);
@@ -7673,11 +7672,11 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
   const load = React.useCallback(() => {
     setErr(null);
     api.get(`/debt-notes/tasks?status=${status}`)
-      .then((r) => { setData(r); setSel(new Set()); })
+      .then((r) => setData(r))
       .catch((e) => setErr(e?.message || "Yuklab bo'lmadi"));
   }, [status]);
   React.useEffect(() => { setData(null); load(); }, [load, version]);
-  React.useEffect(() => { setLimit(TASK_PAGE); setSel(new Set()); }, [status, bucket, group, kind, source, listed, q, search]);
+  React.useEffect(() => { setLimit(TASK_PAGE); }, [status, bucket, group, kind, source, listed, q, search]);
 
   const today = isoToday();
   const items = (data?.items || []).map((t) => ({ ...t, diff: dayDiff(dayKey(t.dueAt), today) }));
@@ -7726,10 +7725,6 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
   const markDone = (ids, done = true) => act(() => api.post('/debt-notes/tasks/done', { ids, done }));
   const move = (ids, iso) => act(() => api.post('/debt-notes/tasks/reschedule', { ids, dueAt: new Date(`${iso}T00:00:00Z`).toISOString() }));
 
-  const toggle = (id) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const allOnPage = page.length > 0 && page.every((t) => sel.has(t.id));
-  const toggleAll = () => setSel(allOnPage ? new Set() : new Set(page.map((t) => t.id)));
-  const selected = [...sel];
 
   const pill = (active, onClick, children) => (
     <button onClick={onClick} style={{
@@ -7793,26 +7788,6 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
         <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Yangi vazifa</Btn>
       </div>
 
-      {/* Bulk bar — only with a selection, so it never competes with the list. */}
-      {sel.size > 0 && (
-        <div style={{
-          display: 'flex', gap: 10, alignItems: 'center', padding: '8px 12px', borderRadius: 12,
-          background: 'var(--g-bg-2)', border: '1px solid var(--g-line)', position: 'sticky', top: 0, zIndex: 5,
-        }}>
-          <b style={{ font: `600 13px ${window.GO.font}` }}>{sel.size} ta tanlandi</b>
-          <div style={{ flex: 1 }} />
-          {status === 'open' ? (
-            <>
-              <RescheduleMenu kind="ghost" onPick={(iso) => move(selected, iso)} />
-              <Btn kind="primary" sm disabled={busy} onClick={() => markDone(selected)}><IconCheck2 size={13} /> Bajarildi</Btn>
-            </>
-          ) : (
-            <Btn kind="ghost" sm disabled={busy} onClick={() => markDone(selected, false)}><IconRefresh size={13} /> Qayta ochish</Btn>
-          )}
-          <Btn kind="quiet" sm onClick={() => setSel(new Set())}>Bekor qilish</Btn>
-        </div>
-      )}
-
       <Card pad={0}>
         {err && <div style={{ padding: 16, font: `400 13px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>{err}</div>}
         {!data && !err && <div style={{ padding: 16, font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>Yuklanmoqda…</div>}
@@ -7822,11 +7797,9 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
           </div>
         )}
         {page.length > 0 && (
-          <label style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid var(--g-line)', font: `600 12px ${window.GO.font}`, color: 'var(--g-ink-3)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={allOnPage} onChange={toggleAll} />
-            Hammasini tanlash ({page.length})
-            <span style={{ marginLeft: 'auto', fontWeight: 400 }}>{shown.length} ta vazifa</span>
-          </label>
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--g-line)', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-3)', textAlign: 'right' }}>
+            {shown.length} ta vazifa
+          </div>
         )}
         {sections.map((s) => (
           <div key={s.k}>
@@ -7841,9 +7814,8 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
               return (
                 <div key={t.id} style={{
                   display: 'flex', gap: 12, alignItems: 'flex-start', padding: '11px 16px',
-                  borderBottom: '1px solid var(--g-line)', background: sel.has(t.id) ? 'var(--g-bg-2)' : 'transparent',
+                  borderBottom: '1px solid var(--g-line)',
                 }}>
-                  <input type="checkbox" checked={sel.has(t.id)} onChange={() => toggle(t.id)} style={{ marginTop: 3 }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <button onClick={() => onOpen(t.bookingId)} style={{ border: 0, background: 'transparent', padding: 0, cursor: 'pointer', font: `600 13.5px ${window.GO.font}`, color: 'var(--g-brand-ink)' }}>
@@ -8178,6 +8150,10 @@ function TalabnomaDrawer({ open, onClose, onSent }) {
     <input type="checkbox" checked={checked} disabled={!!busy} onChange={onChange} style={{ cursor: 'pointer', width: 15, height: 15 }} />
   );
   const allSent = sent.length > 0 && pickedSent.size === sent.length;
+  // Select all / none on the ready tab covers only the tenants that can go —
+  // a row with a problem has no checkbox to tick.
+  const sendable = ready.filter((g) => !g.problem).map((g) => g.companyId);
+  const allReady = sendable.length > 0 && sendable.every((id) => picked.has(id));
 
   return (
     <Drawer open={open} onClose={onClose} width={900}>
@@ -8225,7 +8201,7 @@ function TalabnomaDrawer({ open, onClose, onSent }) {
               ? <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>«Pretenziya (loyiha)» bosqichida sobiq ijarachi yo‘q.</div>
               : (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  {head(['', 'Ijarachi', 'Shartnomalar', 'Akt sverki', 'Qarz'])}
+                  {head([sendable.length ? box(allReady, () => setPicked(allReady ? new Set() : new Set(sendable))) : '', 'Ijarachi', 'Shartnomalar', 'Akt sverki', 'Qarz'])}
                   <tbody>
                     {ready.map((g) => (
                       <tr key={g.companyId || g.name} style={{ opacity: g.problem ? 0.6 : 1 }}>
