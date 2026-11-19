@@ -4561,7 +4561,7 @@ function BuildingForm({ building, role, onClose, onCreated }) {
             </div>
           </div>
           <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 10 }}>
-            Pretenziya va to'lov talabnomasida to'lov rekvizitlari sifatida chiqadi.
+            Pretenziya va talabnomada to'lov rekvizitlari sifatida chiqadi.
           </div>
         </Card>
 
@@ -6560,16 +6560,21 @@ const EVENT_META = {
 // ═══ UNDIRUV: the escalation case ═══════════════════════════
 //
 // One debt, one case, one ladder: eslatma → ogohlantirish → pretenziya →
-// talabnoma (kartoteka) → sud → MIB. The engine climbs the first rungs on its
-// own; everything from the claim letter on is entered by an operator, because
-// each of those is a document with a number and a date behind it.
+// sud → MIB. The engine climbs the first rungs on its own; everything from the
+// claim letter on is entered by an operator, because each of those is a
+// document with a number and a date behind it.
+//
+// The bank demand (to'lov talabnomasi / kartoteka) came off the ladder on
+// 2026-11-19 — the banks did not act on it. `demand` stays in these tables
+// only so a case or step recorded before then still reads; `legacy` keeps it
+// out of the stage filter unless such a case exists.
 
 const CASE_STAGE = {
   reminder:    { label: 'Eslatma', hue: 250 },
   warning:     { label: 'Ogohlantirish', hue: 55 },
   claim_draft: { label: 'Pretenziya (loyiha)', hue: 40 },
   claim:       { label: 'Pretenziya', hue: 25 },
-  demand:      { label: 'Talabnoma (kartoteka)', hue: 300 },
+  demand:      { label: 'Bank talabnomasi (eski)', hue: 300, legacy: true },
   court:       { label: 'Sud', hue: 340 },
   enforcement: { label: 'MIB', hue: 10 },
 };
@@ -6613,7 +6618,7 @@ const CASE_STEP = {
 // primary button so the operator sees what comes next at a glance.
 const CASE_FORWARD = {
   reminder: 'warning', warning: 'claim_draft', claim_draft: 'claim',
-  claim: 'demand', demand: 'court', court: 'enforcement',
+  claim: 'court', demand: 'court', court: 'enforcement',
 };
 
 // What each step asks for. ONE generic form is rendered from this table, so a
@@ -6743,7 +6748,6 @@ const CASE_FILE_KIND = {
 // has no file input (pause, resume, reopen, warning, claim_draft).
 const STEP_FILE_KIND = {
   claim: 'pretenziya', claim_response: 'delivery_proof',
-  demand: 'demand', demand_update: 'demand',
   court: 'court_filing', court_hearing: 'court_filing', court_decision: 'court_decision',
   enforcement: 'enforcement', enforcement_update: 'enforcement',
   close: 'other', terminate: 'other', blacklist: 'other',
@@ -6756,7 +6760,7 @@ const fmtBytes = (n) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB`
 
 // Auth-gated case document or file → new tab, the openContractDocument way:
 // the tab is opened inside the click so it isn't popup-blocked, then pointed
-// at the blob. Failures go to `onErr` — the demand letter 400s before its step.
+// at the blob. Failures go to `onErr` — a letter can 400 before its step.
 async function openCasePath(path, onErr) {
   const w = window.open('', '_blank');
   try {
@@ -7169,16 +7173,9 @@ function DebtNotesPanel({ bookingId, companyId, onChanged, hostId, caseId, versi
 // ─── Record one step on a case ──────────────────────────────
 // One form for every step kind, drawn from STEP_FIELDS. The API validates
 // again; the required check here only saves the round trip.
-//
-// `company` is the tenant's company row: a demand form starts from the bank
-// details remembered off the last demand, so they are typed once per tenant.
-function CaseStepForm({ caseId, kind, company, onDone, onCancel }) {
+function CaseStepForm({ caseId, kind, onDone, onCancel }) {
   const fields = STEP_FIELDS[kind] || [];
-  const remembered = kind === 'demand' ? (((company && company.bankDetails) || [])[0] || null) : null;
-  const [f, setF] = React.useState(() => ({
-    ...Object.fromEntries(fields.map((x) => [x.k, ''])),
-    ...(remembered ? { bank: remembered.bank || '', mfo: remembered.mfo || '', account: remembered.account || '' } : {}),
-  }));
+  const [f, setF] = React.useState(() => Object.fromEntries(fields.map((x) => [x.k, ''])));
   const [at, setAt] = React.useState(isoToday());
   const [summary, setSummary] = React.useState('');
   const [file, setFile] = React.useState(null);
@@ -7280,11 +7277,6 @@ function CaseStepForm({ caseId, kind, company, onDone, onCancel }) {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-        {remembered && (
-          <div style={{ gridColumn: '1 / -1', font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
-            Bank rekvizitlari: oldingi talabnomadan olindi{remembered.seenAt ? ` (${fmtDate(remembered.seenAt)})` : ''}
-          </div>
-        )}
         {!hasOwnAt && (
           <div>
             <Label>Sana</Label>
@@ -7336,9 +7328,6 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
   const [fileErr, setFileErr] = React.useState(null); // a file that would not open/delete
   const isPlatform = (api.currentUser() || {}).role === 'platform';
   const canCollect = api.can('collect');
-  // The tenant's company row carries the bank details remembered off the
-  // last demand; the demand form starts from them.
-  const company = (window.COMPANIES || []).find((x) => x.id === (row.company || {}).id) || null;
   // The drawer wants the case id for the timeline; keep the callback out of
   // the effect's dependencies so a re-render never refetches.
   const onCaseRef = React.useRef(onCase);
@@ -7415,7 +7404,6 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
   const docs = [
     reached('warning') && { path: 'warning', label: 'Ogohlantirish xati' },
     reached('claim_draft') && { path: 'pretenziya', label: c.stage === 'claim_draft' ? 'Pretenziya (loyiha)' : 'Pretenziya' },
-    reached('demand') && { path: 'demand', label: 'Talabnoma' },
   ].filter(Boolean);
   const openDoc = (path) => { setDocErr(null); openCasePath(`/collection/${encodeURIComponent(c.id)}/${path}`, setDocErr); };
 
@@ -7516,7 +7504,6 @@ function CollectionCaseCard({ row, onChanged, onCase, version }) {
           <CaseStepForm
             caseId={c.id}
             kind={step}
-            company={company}
             onCancel={() => setStep(null)}
             onDone={() => { setStep(null); changed(); }}
           />
@@ -7672,6 +7659,10 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
   const [group, setGroup] = React.useState('all');
   const [kind, setKind] = React.useState('all');
   const [source, setSource] = React.useState('all');
+  // Blacklisted tenants stay on the list — listing comes after the money is
+  // chased, so their claim and court work is still real work. This only
+  // narrows to them or away from them.
+  const [listed, setListed] = React.useState('all');
   const [q, setQ] = React.useState('');
   const [sel, setSel] = React.useState(() => new Set());
   const [limit, setLimit] = React.useState(TASK_PAGE);
@@ -7686,7 +7677,7 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
       .catch((e) => setErr(e?.message || "Yuklab bo'lmadi"));
   }, [status]);
   React.useEffect(() => { setData(null); load(); }, [load, version]);
-  React.useEffect(() => { setLimit(TASK_PAGE); setSel(new Set()); }, [status, bucket, group, kind, source, q, search]);
+  React.useEffect(() => { setLimit(TASK_PAGE); setSel(new Set()); }, [status, bucket, group, kind, source, listed, q, search]);
 
   const today = isoToday();
   const items = (data?.items || []).map((t) => ({ ...t, diff: dayDiff(dayKey(t.dueAt), today) }));
@@ -7701,6 +7692,7 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
     (group === 'all' || t.group === group)
     && (kind === 'all' || t.kind === kind)
     && (source === 'all' || (source === 'auto') === t.auto)
+    && (listed === 'all' || (listed === 'blocked') === !!t.blacklist?.blocked)
     && (!needle || needle.split(/\s+/).every((w) => `${t.company || ''} ${t.customer} ${t.place} ${t.body} ${t.phone || ''}`.toLowerCase().includes(w))));
   const counts = TASK_BUCKETS.reduce((acc, b) => { acc[b.k] = filtered.filter((t) => b.test(t.diff)).length; return acc; }, {});
   const shown = status === 'done' || bucket === 'all' ? filtered
@@ -7795,6 +7787,7 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
         {filterSelect(group, setGroup, [['all', 'Barcha ijarachilar'], ['current', 'Joriy'], ['former', 'Sobiq']])}
         {filterSelect(kind, setKind, [['all', 'Barcha turlar'], ...Object.entries(NOTE_KINDS).map(([k, v]) => [k, v.label])])}
         {filterSelect(source, setSource, [['all', 'Avto va qo\'lda'], ['auto', 'Avtomatik'], ['manual', "Qo'lda"]])}
+        {filterSelect(listed, setListed, [['all', "Qora ro'yxat: hammasi"], ['blocked', "Qora ro'yxatdagilar"], ['clean', "Qora ro'yxatsiz"]])}
         <input className="adm-input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Qidirish…" style={{ width: 200 }} />
         <div style={{ flex: 1 }} />
         <Btn kind="primary" sm onClick={() => setAdding(true)}><IconPlus size={14} /> Yangi vazifa</Btn>
@@ -7859,6 +7852,12 @@ function TasksPanel({ search, rows, onOpen, version, onChanged }) {
                       <Chip hue={meta.hue}>{meta.label}</Chip>
                       {t.auto && <Chip hue={280} title="Undiruv tizimi yaratgan">Avto</Chip>}
                       {t.group === 'former' && <Chip hue={25}>Sobiq</Chip>}
+                      {t.blacklist?.blocked && (
+                        <Chip hue={25} style={{ background: 'oklch(0.32 0.03 25)', color: '#fff' }}
+                          title={[t.blacklist.reason, t.blacklist.matchedBy && `moslik: ${t.blacklist.matchedBy}`].filter(Boolean).join(' · ')}>
+                          Qora ro'yxatda
+                        </Chip>
+                      )}
                       {debt > 0 && <span style={{ font: `700 12px ${window.GO.font}`, color: 'oklch(0.5 0.16 25)' }}>qarz {window.fmtSom(debt)} so'm</span>}
                     </div>
                     <div style={{ font: `400 13px ${window.GO.font}`, color: 'var(--g-ink-2)', marginTop: 3 }}>{t.body}</div>
@@ -8216,8 +8215,14 @@ function TalabnomaDrawer({ open, onClose, onSent }) {
               ))}
             </div>
 
+            {tab === 'ready' && data.currentWaiting > 0 && (
+              <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', background: 'var(--g-bg-2)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+                Yana <b>{data.currentWaiting}</b> ta joriy ijarachi pretenziya bosqichida. Talabnoma faqat sobiq ijarachiga yuboriladi — avval shartnomani bekor qiling.
+              </div>
+            )}
+
             {tab === 'ready' && (ready.length === 0
-              ? <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>«Pretenziya (loyiha)» bosqichida ish yo‘q.</div>
+              ? <div style={{ color: 'var(--g-ink-4)', font: `400 13px ${window.GO.font}` }}>«Pretenziya (loyiha)» bosqichida sobiq ijarachi yo‘q.</div>
               : (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   {head(['', 'Ijarachi', 'Shartnomalar', 'Akt sverki', 'Qarz'])}
@@ -9167,7 +9172,7 @@ function DebtorsScreen({ search }) {
   const stageOptions = [
     { k: 'all', label: 'Barchasi' },
     { k: 'none', label: 'Yangi' },
-    ...Object.entries(CASE_STAGE).map(([k, v]) => ({ k, label: v.label, hue: v.hue })),
+    ...Object.entries(CASE_STAGE).filter(([k, v]) => !v.legacy || stageCounts[k]).map(([k, v]) => ({ k, label: v.label, hue: v.hue })),
     { k: 'paused', label: CASE_STATUS.paused.label, hue: CASE_STATUS.paused.hue },
   ];
   // Tenants in credit — the other side of the same book, on their own tab so
@@ -9381,9 +9386,13 @@ function DebtorsScreen({ search }) {
           file is the whole book, with a Guruh column telling joriy and sobiq
           apart. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 10 }}>
-        <Btn kind="ghost" sm onClick={() => setTalabnoma(true)} title="Pretenziya bosqichidagi ishlar — didox orqali talabnoma va bitta PDF">
-          <IconDoc size={14} /> Talabnomalar
-        </Btn>
+        {/* Only for tenants who have left: a current tenant's contract is ended
+            first, which turns them sobiq. The server holds the same line. */}
+        {former && (
+          <Btn kind="ghost" sm onClick={() => setTalabnoma(true)} title="Sobiq ijarachilar, pretenziya bosqichida — didox orqali talabnoma va bitta PDF">
+            <IconDoc size={14} /> Talabnomalar
+          </Btn>
+        )}
         <ExportDebtorsBtn />
       </div>
       <TalabnomaDrawer open={talabnoma} onClose={() => setTalabnoma(false)} onSent={() => window.__gorentRefresh && window.__gorentRefresh()} />
