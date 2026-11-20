@@ -4888,6 +4888,12 @@ function CompaniesScreen({ search }) {
               style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.48 0.14 55)', background: 'oklch(0.95 0.05 55)', padding: '1px 6px', borderRadius: 5 }}
             >ESF yo‘q</span>
           )}
+          {c.graceDays > 0 && (
+            <span
+              title={`To‘lov muddati +${c.graceDays} kun${c.creditLimit ? ` · limit ${fmtSom(c.creditLimit)}` : ''}${c.creditTermsReason ? ` — ${c.creditTermsReason}` : ''}`}
+              style={{ font: `600 10px ${window.GO.font}`, color: 'oklch(0.45 0.12 250)', background: 'oklch(0.95 0.03 250)', padding: '1px 6px', borderRadius: 5 }}
+            >+{c.graceDays} kun</span>
+          )}
         </div>
         <div style={{ font: `400 12px ui-monospace, monospace`, color: 'var(--g-ink-4)' }}>{window.taxLabel(c) || '—'}</div>
       </div>
@@ -5227,6 +5233,17 @@ function CompanyForm({ company, onClose }) {
   const [files, setFiles] = React.useState({ passport: null, guvohnoma: null });
   const [busy, setBusy] = React.useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  // Payment terms («ishonchli mijoz»): saved through their own endpoint, which
+  // stamps who decided. Only sent when something actually changed.
+  const termsInit = {
+    on: (company?.graceDays || 0) > 0,
+    graceDays: company?.graceDays ? String(company.graceDays) : '30',
+    creditLimit: company?.creditLimit ? String(company.creditLimit) : '',
+    reason: company?.creditTermsReason || '',
+  };
+  const [terms, setTerms] = React.useState(termsInit);
+  const setTerm = (k, v) => setTerms((s) => ({ ...s, [k]: v }));
+  const termsChanged = JSON.stringify(terms) !== JSON.stringify(termsInit);
   const Label = ({ children }) => <div style={{ font: `600 12.5px ${window.GO.font}`, color: 'var(--g-ink-2)', marginBottom: 7 }}>{children}</div>;
 
   const setPhone = (i, v) => setF((s) => { const p = [...s.phones]; p[i] = v; return { ...s, phones: p }; });
@@ -5266,6 +5283,11 @@ function CompanyForm({ company, onClose }) {
       window.alert(isIndividual ? '14 xonali PINFL talab qilinadi' : '9 xonali INN talab qilinadi');
       return;
     }
+    const grace = Number(terms.graceDays);
+    const limitDigits = terms.creditLimit.replace(/[^0-9]/g, '');
+    if (terms.on && (!Number.isInteger(grace) || grace < 1 || grace > 365)) {
+      window.alert('To‘lov muddati 1 dan 365 kungacha bo‘lishi kerak'); return;
+    }
     setBusy(true);
     try {
       const payload = {
@@ -5283,6 +5305,11 @@ function CompanyForm({ company, onClose }) {
       const saved = isEdit ? await api.patch(`/companies/${company.id}`, payload) : await api.post('/companies', payload);
       if (files.passport) await api.upload(`/companies/${saved.id}/files/passport`, files.passport);
       if (files.guvohnoma) await api.upload(`/companies/${saved.id}/files/guvohnoma`, files.guvohnoma);
+      if (termsChanged) {
+        await api.patch(`/companies/${saved.id}/credit-terms`, terms.on
+          ? { graceDays: grace, creditLimit: limitDigits ? Number(limitDigits) : null, reason: terms.reason.trim() || undefined }
+          : { graceDays: null });
+      }
       if (window.__gorentRefresh) await window.__gorentRefresh();
       onClose();
     } catch (e) { window.alert(e.message); setBusy(false); }
@@ -5458,6 +5485,57 @@ function CompanyForm({ company, onClose }) {
                 Ijara hisoblanishi davom etadi — ijarachi «Undiruv» ro‘yxatida qoladi va
                 to‘lov eslatmalarini oladi. Faqat ESF yaratilmaydi.
               </div>
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <div style={{ font: `700 15px ${window.GO.font}`, color: 'var(--g-ink)', marginBottom: 4 }}>To‘lov shartlari</div>
+          <div style={{ font: `400 12px ${window.GO.font}`, color: 'var(--g-ink-4)', marginBottom: 12 }}>
+            Ishonchli mijozga keyinroq to‘lashga ruxsat berish.
+          </div>
+          <Row
+            title="Ishonchli mijoz"
+            sub="Kechikish har bir to‘lov sanasidan shuncha kun keyin hisoblanadi: SMS eslatmalar, undiruv ishi va «Kun tartibi» shu muddatni kutadi."
+            last={!terms.on}
+          >
+            <Toggle on={terms.on} onClick={() => setTerm('on', !terms.on)} />
+          </Row>
+          {terms.on && (
+            <div style={{ paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
+                <div>
+                  <Label>Qo‘shimcha muddat, kun</Label>
+                  <input className="adm-input" inputMode="numeric" value={terms.graceDays}
+                    onChange={(e) => setTerm('graceDays', e.target.value.replace(/[^0-9]/g, '').slice(0, 3))} placeholder="30" />
+                </div>
+                <div>
+                  <Label>Kredit limiti, so‘m (ixtiyoriy)</Label>
+                  <input className="adm-input" inputMode="numeric"
+                    value={terms.creditLimit ? Number(terms.creditLimit).toLocaleString('ru-RU') : ''}
+                    onChange={(e) => setTerm('creditLimit', e.target.value.replace(/[^0-9]/g, '').slice(0, 12))} placeholder="Limitsiz" />
+                </div>
+              </div>
+              <div>
+                <Label>Sababi</Label>
+                <input className="adm-input" value={terms.reason} onChange={(e) => setTerm('reason', e.target.value)}
+                  placeholder="Masalan: 3 yildan beri ijarachi, har doim to‘laydi" />
+              </div>
+              <div style={{
+                padding: '9px 12px', borderRadius: 9,
+                background: 'color-mix(in oklch, oklch(0.6 0.12 250) 10%, transparent)',
+                font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-2)',
+              }}>
+                Ijara odatdagidek hisoblanadi va qarz «Undiruv»da ko‘rinib turadi — faqat «kechikdi» deb hisoblanishi
+                kechiktiriladi. {terms.creditLimit
+                  ? 'Barcha shartnomalari bo‘yicha qarzi limitdan oshsa, imtiyoz o‘z-o‘zidan to‘xtaydi.'
+                  : 'Limit qo‘yilmasa, qarz qancha bo‘lmasin imtiyoz amal qiladi.'}
+              </div>
+            </div>
+          )}
+          {company?.creditTermsSetAt && (
+            <div style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)', marginTop: 10 }}>
+              Oxirgi o‘zgarish: {company.creditTermsSetBy || '—'} · {fmtDate(company.creditTermsSetAt)}
             </div>
           )}
         </Card>
@@ -9111,6 +9189,26 @@ function PrepaidPanel({ rows, onRow }) {
   );
 }
 
+// A trusted tenant's payment terms on a debtor row (api common/credit-terms.ts).
+// Inside the grace the debt is owed but not late; over the limit the grace is
+// off and the row is chased like any other — both are said out loud.
+function TermsChip({ t }) {
+  if (!t) return null;
+  const limit = t.creditLimit ? ` · limit ${fmtSom(t.creditLimit)}` : '';
+  const owed = t.exposure !== undefined ? ` · jami qarz ${fmtSom(t.exposure)}` : '';
+  const [label, fg, bg, why] = t.overLimit
+    ? ['Limitdan oshgan', 'oklch(0.5 0.16 25)', 'oklch(0.95 0.04 25)', 'Kredit limiti oshdi — imtiyoz to‘xtadi, oddiy tartibda undiriladi.']
+    : t.deferred
+      ? ['Muddati uzaytirilgan', 'oklch(0.45 0.12 250)', 'oklch(0.95 0.03 250)', `Hali kechikmagan: ${t.rawDaysOverdue} / ${t.graceDays} kun imtiyoz.`]
+      : ['Ishonchli mijoz', 'oklch(0.45 0.12 250)', 'oklch(0.95 0.03 250)', `Imtiyoz tugagan: kechikish ${t.graceDays} kundan keyin hisoblanmoqda.`];
+  return (
+    <span title={`+${t.graceDays} kun to‘lov muddati${limit}${owed}. ${why}`} style={{
+      display: 'inline-block', marginTop: 4, marginLeft: 47, font: `600 10.5px ${window.GO.font}`,
+      color: fg, background: bg, padding: '1px 7px', borderRadius: 5, whiteSpace: 'nowrap',
+    }}>{label}</span>
+  );
+}
+
 function DebtorsScreen({ search }) {
   const data = window.DEBTORS || { totals: { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 }, rows: [] };
   const totals = data.totals || { outstanding: 0, prepaid: 0, accruing: 0, debtorCount: 0 };
@@ -9180,7 +9278,10 @@ function DebtorsScreen({ search }) {
 
   const columns = [
     { key: 'cust', label: 'Mijoz', render: (r) => (
-      <PersonCell name={r.customer} sub={`${r.company?.name ? r.company.name + ' · ' : ''}+${r.phone}`} hue={nameHue(r.customer)} />
+      <div style={{ minWidth: 0 }}>
+        <PersonCell name={r.customer} sub={`${r.company?.name ? r.company.name + ' · ' : ''}+${r.phone}`} hue={nameHue(r.customer)} />
+        <TermsChip t={r.terms} />
+      </div>
     ) },
     { key: 'place', label: 'Joy', render: (r) => (
       <div style={{ minWidth: 0 }}>
@@ -9322,6 +9423,11 @@ function DebtorsScreen({ search }) {
         <div style={{ font: `400 12.5px ${window.GO.font}`, color: 'var(--g-ink-3)', margin: '-6px 0 14px' }}>
           Undiruv: <b style={{ color: 'var(--g-ink)' }}>{totals.casesOpen || 0}</b> ochiq ish
           {' · '}<b style={{ color: totals.caseActionsDue > 0 ? 'oklch(0.5 0.16 25)' : 'var(--g-ink)' }}>{totals.caseActionsDue || 0}</b> ta bugun
+          {totals.deferred?.count > 0 && (
+            <span title="Ishonchli mijozlar: qarz bor, lekin to‘lov muddati hali tugamagan. «Jami qarz» ichida.">
+              {' · '}muddati uzaytirilgan: <b style={{ color: 'var(--g-ink)' }}>{totals.deferred.count}</b> ta, {window.fmtCompactSom(totals.deferred.outstanding)}
+            </span>
+          )}
         </div>
       )}
 
