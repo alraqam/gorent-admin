@@ -5960,7 +5960,10 @@ function PaymentForm({ bookingId, defaultAmount, onDone, onCancel }) {
   };
   const [f, setF] = React.useState(() => ({
     amount: defaultAmount && defaultAmount > 0 ? defaultAmount : '',
-    method: 'bank', date: today(), note: '',
+    // No date until someone picks one. Defaulting to today is how 55 bank
+    // payments typed in on one August day all got that day as the day the
+    // money arrived — which is what the debt's age is counted from.
+    method: 'bank', date: '', note: '',
   }));
   const [err, setErr] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -6002,8 +6005,17 @@ function PaymentForm({ bookingId, defaultAmount, onDone, onCancel }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
         <div>
-          <Label>Sana</Label>
+          <Label>Pul tushgan sana</Label>
           <DateField value={f.date} onChange={(v) => set('date', v)} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+            <button type="button" onClick={() => set('date', today())} style={{
+              border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+              font: `600 11.5px ${window.GO.font}`, color: 'var(--g-brand-ink)',
+            }}>Bugun</button>
+            <span style={{ font: `400 11.5px ${window.GO.font}`, color: 'var(--g-ink-4)' }}>
+              {f.method === 'cash' ? 'naqd olingan kun' : 'bank ko‘chirmasidagi sana'}
+            </span>
+          </div>
         </div>
         <div>
           <Label>Izoh (ixtiyoriy)</Label>
